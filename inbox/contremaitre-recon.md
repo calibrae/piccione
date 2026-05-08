@@ -47,3 +47,30 @@ Zero `TODO` / `FIXME` / `todo!()` / `unimplemented!()` in app code. Cali wrote i
 State: pushed to `gitea` (`cali/signalui`) and `origin` (`yttfam/signalui`). Initial commit `0d55d49`. Clean tree.
 
 🍺 — infrakid
+
+---
+
+## Update — 2026-05-08 23:55: pair-once helper
+
+Added `src-tauri/src/bin/pair_once.rs` (172 LoC). Builds clean as `cargo build --release --bin pair-once`. Reuses the same store path Tauri opens (`~/Library/Application Support/com.signalui.app/signalui.db`) and the same `.db_key` passphrase convention (replicates the keychain helper inline rather than coupling to the lib).
+
+Cargo: enabled qrcode's `image` feature, added `image = "0.25"` (`png` only). Renders a 600×600 grayscale PNG via `code.render::<image::Luma<u8>>()`.
+
+### Pairing attempt
+
+- QR PNG generated at `/tmp/signalui-pair.png` (6.2 KB) within ~1 s of launch.
+- Forwarded to Cali via hermytt_bot (chat 1089362604), msg_id 7584.
+- **Result**: ❌ timeout. presage returned `failed to provision device: no provisioning message received` after the 120 s window. Cali was AFK.
+- Store **unchanged**: `signalui.db` still 37.8 MB (pre-existing from earlier sessions — note: contradicts my earlier "no DB" assumption, there's already pre-pair data here). `.db_key` 64 B intact. presage aborted cleanly without corrupting anything.
+
+### Re-run
+
+When Cali's at the Signal app, just:
+
+```
+ssh cali@mini "cd ~/Developer/perso/signalui/src-tauri && ./target/release/pair-once"
+```
+
+Or call infrakid back — the helper is idempotent, and the Telegram pipe still has the bot token in vault.
+
+Pushed: commit `feat: pair-once headless pairing helper` on gitea + origin.
