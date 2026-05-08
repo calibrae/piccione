@@ -1,0 +1,30 @@
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Tests
+playwright-report/
+test-results/
+coverage/
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Claude / agent local
+.claude/settings.local.json
