@@ -7,6 +7,14 @@ edition = "2021"
 name = "signalui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "signalui"
+path = "src/main.rs"
+
+[[bin]]
+name = "pair-once"
+path = "src/bin/pair_once.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -18,7 +26,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 presage = { git = "https://github.com/whisperfish/presage", branch = "main" }
 presage-store-sqlite = { git = "https://github.com/whisperfish/presage", branch = "main" }
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg", "image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }
 thiserror = "2"
