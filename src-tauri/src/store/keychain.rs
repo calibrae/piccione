@@ -111,9 +111,19 @@ pub fn get_or_create_db_passphrase_with<K: KeychainBackend>(
     Ok(passphrase)
 }
 
-/// Delete the database encryption key from the Keychain.
+/// Delete the database encryption key from the real Keychain.
+///
+/// Used by the "sign out / unpair" flow. After the call the app must be
+/// restarted: the running messaging service still holds the cached
+/// passphrase in `AppState::db_passphrase`.
+#[allow(dead_code)] // public ergonomic wrapper; sign_out goes through delete_db_passphrase_with directly
 pub fn delete_db_passphrase() -> Result<(), KeychainError> {
-    SystemKeychain.delete(SERVICE_NAME, DB_KEY_ACCOUNT)
+    delete_db_passphrase_with(&SystemKeychain)
+}
+
+/// Backend-generic variant for unit tests.
+pub fn delete_db_passphrase_with<K: KeychainBackend>(keychain: &K) -> Result<(), KeychainError> {
+    keychain.delete(SERVICE_NAME, DB_KEY_ACCOUNT)
 }
 
 fn generate_passphrase() -> Zeroizing<String> {
@@ -140,15 +150,21 @@ pub enum KeychainError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
     /// In-memory keychain used by tests.
     #[derive(Default)]
-    struct MemoryKeychain {
+    pub(crate) struct MemoryKeychain {
         store: Mutex<HashMap<(String, String), Vec<u8>>>,
+    }
+
+    impl MemoryKeychain {
+        pub(crate) fn len(&self) -> usize {
+            self.store.lock().unwrap().len()
+        }
     }
 
     impl KeychainBackend for MemoryKeychain {
@@ -256,10 +272,46 @@ mod tests {
         assert_eq!(p1.as_str(), p2.as_str());
     }
 
+    #[test]
+    fn delete_removes_existing_entry() {
+        let kc = MemoryKeychain::default();
+        kc.set(SERVICE_NAME, DB_KEY_ACCOUNT, b"hunter2").unwrap();
+        assert_eq!(kc.len(), 1);
+        delete_db_passphrase_with(&kc).unwrap();
+        assert_eq!(kc.len(), 0);
+    }
+
+    #[test]
+    fn delete_is_idempotent_when_missing() {
+        let kc = MemoryKeychain::default();
+        // Calling delete on an empty backend must not error; sign-out
+        // happens-while-already-signed-out is a real path.
+        delete_db_passphrase_with(&kc).unwrap();
+        delete_db_passphrase_with(&kc).unwrap();
+        assert_eq!(kc.len(), 0);
+    }
+
+    #[test]
+    fn delete_after_create_round_trip() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+
+        // Cold start populates the keychain, then delete wipes it.
+        let _ = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(kc.len(), 1);
+        delete_db_passphrase_with(&kc).unwrap();
+        assert_eq!(kc.len(), 0);
+
+        // A subsequent get_or_create should mint a fresh passphrase, not
+        // resurrect the old one.
+        let new_pass = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(new_pass.len(), 64);
+    }
+
     /// Ad-hoc tempdir helper — avoids pulling in the `tempfile` crate just for two tests.
-    struct TmpDir(std::path::PathBuf);
+    pub(crate) struct TmpDir(pub std::path::PathBuf);
     impl TmpDir {
-        fn path(&self) -> &std::path::Path {
+        pub fn path(&self) -> &std::path::Path {
             &self.0
         }
     }
@@ -268,7 +320,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    fn tempdir() -> TmpDir {
+    pub(crate) fn tempdir() -> TmpDir {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
