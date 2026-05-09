@@ -5,17 +5,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::StreamExt;
 use presage::libsignal_service::content::ContentBody;
 use presage::libsignal_service::prelude::Content;
-use presage::libsignal_service::proto::DataMessage;
+use presage::libsignal_service::proto::{
+    data_message::{Delete, Reaction},
+    sync_message, DataMessage, EditMessage, ReceiptMessage, SyncMessage, TypingMessage,
+};
 use presage::libsignal_service::protocol::ServiceId;
 use presage::manager::Registered;
 use presage::model::identity::OnNewIdentity;
 use presage::store::{ContentsStore, StateStore, Store, Thread};
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
-use tokio::sync::{mpsc, Mutex, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
-use crate::messaging::types::{AttachmentInfo, ChatMessage, Conversation};
+use crate::messaging::types::{
+    AttachmentInfo, ChatMessage, Conversation, DeleteEvent, EditEvent, InboundEvent, ReactionEvent,
+    ReceiptEvent, ReceiptKind, TypingAction, TypingEvent,
+};
 
 struct SendRequest {
     conversation_id: String,
@@ -53,13 +59,9 @@ impl MessagingService {
 
     /// Try to load an existing registered manager and start messaging.
     /// Returns true if successful (device was previously linked).
-    pub async fn try_load_and_start<F>(
-        &self,
-        passphrase: &str,
-        on_message: F,
-    ) -> bool
+    pub async fn try_load_and_start<F>(&self, passphrase: &str, on_event: F) -> bool
     where
-        F: Fn(String, ChatMessage) + Send + Sync + 'static,
+        F: Fn(InboundEvent) + Send + Sync + 'static,
     {
         let store = match self.open_store(passphrase).await {
             Ok(s) => s,
@@ -83,7 +85,7 @@ impl MessagingService {
                 *self.read_store.lock().await = Some(read_store);
                 *self.db_passphrase.lock().await = Some(passphrase.to_string());
 
-                self.start_messaging_thread(mgr, on_message).await;
+                self.start_messaging_thread(mgr, on_event).await;
                 true
             }
             Err(e) => {
@@ -111,9 +113,9 @@ impl MessagingService {
     pub async fn start_after_provisioning<F>(
         &self,
         mgr: Manager<SqliteStore, Registered>,
-        on_message: F,
+        on_event: F,
     ) where
-        F: Fn(String, ChatMessage) + Send + Sync + 'static,
+        F: Fn(InboundEvent) + Send + Sync + 'static,
     {
         let aci = mgr
             .registration_data()
@@ -125,7 +127,7 @@ impl MessagingService {
         *self.self_aci.lock().await = Some(aci);
         *self.read_store.lock().await = Some(read_store);
 
-        self.start_messaging_thread(mgr, on_message).await;
+        self.start_messaging_thread(mgr, on_event).await;
     }
 
     /// Set up after provisioning on the CURRENT LocalSet (no new thread).
@@ -134,7 +136,7 @@ impl MessagingService {
         &self,
         mgr: Manager<SqliteStore, Registered>,
         passphrase: &str,
-        on_message: impl Fn(String, ChatMessage) + Send + Sync + 'static,
+        on_event: impl Fn(InboundEvent) + Send + Sync + 'static,
     ) {
         let aci = mgr
             .registration_data()
@@ -151,12 +153,14 @@ impl MessagingService {
         *self.send_tx.lock().await = Some(send_tx);
 
         let self_aci = self.self_aci.clone();
-        let on_message = Arc::new(on_message);
+        let on_event = Arc::new(on_event);
 
         let mut mgr_send = mgr.clone();
         let mgr_download = mgr.clone();
         let mut mgr_recv = mgr;
-        let attachments_dir = self.db_path.parent()
+        let attachments_dir = self
+            .db_path
+            .parent()
             .unwrap_or(std::path::Path::new("/tmp"))
             .join("attachments");
         let _ = std::fs::create_dir_all(&attachments_dir);
@@ -168,7 +172,7 @@ impl MessagingService {
 
         // Spawn receive loop locally
         let self_aci_recv = self_aci.clone();
-        let on_message_recv = on_message.clone();
+        let on_event_recv = on_event.clone();
         let att_dir = attachments_dir.clone();
         tokio::task::spawn_local(async move {
             loop {
@@ -186,19 +190,14 @@ impl MessagingService {
                                     info!("contacts synced");
                                 }
                                 presage::model::messages::Received::Content(content) => {
-                                    let mut chat_msg = match content_to_chat_message(&content, &self_aci_val) {
-                                        Some(m) => m,
-                                        None => continue,
-                                    };
-
-                                    // Download attachments
-                                    download_attachments(&mgr_download, &mut chat_msg, &att_dir).await;
-
-                                    // Resolve sender's display name from the contact store.
-                                    enrich_sender_name(&mut chat_msg, mgr_download.store(), &self_aci_val).await;
-
-                                    let conv_id = resolve_conversation_id(&content);
-                                    on_message_recv(conv_id, chat_msg);
+                                    process_content(
+                                        &content,
+                                        &self_aci_val,
+                                        &mgr_download,
+                                        &att_dir,
+                                        on_event_recv.as_ref(),
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -217,7 +216,9 @@ impl MessagingService {
             info!("send handler ready");
             while let Some(req) = send_rx.recv().await {
                 info!("processing send to {}", req.conversation_id);
-                let result = do_send(&mut mgr_send, &req.conversation_id, &req.body, &req.file_paths).await;
+                let result =
+                    do_send(&mut mgr_send, &req.conversation_id, &req.body, &req.file_paths)
+                        .await;
                 if let Err(ref e) = result {
                     error!("send failed: {}", e);
                 } else {
@@ -232,15 +233,15 @@ impl MessagingService {
     async fn start_messaging_thread<F>(
         &self,
         mgr: Manager<SqliteStore, Registered>,
-        on_message: F,
+        on_event: F,
     ) where
-        F: Fn(String, ChatMessage) + Send + Sync + 'static,
+        F: Fn(InboundEvent) + Send + Sync + 'static,
     {
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendRequest>();
         *self.send_tx.lock().await = Some(send_tx);
 
         let self_aci = self.self_aci.clone();
-        let on_message = Arc::new(on_message);
+        let on_event = Arc::new(on_event);
         let db_path = self.db_path.clone();
 
         std::thread::Builder::new()
@@ -254,75 +255,84 @@ impl MessagingService {
 
                 rt.block_on(async move {
                     let local = tokio::task::LocalSet::new();
-                    local.run_until(async move {
-                        // Clone for receiving, keep original for sending
-                        let mut mgr_send = mgr.clone();
-                        let mgr_download = mgr.clone();
-                        let mut mgr_recv = mgr;
-                        let att_dir = db_path.parent()
-                            .unwrap_or(std::path::Path::new("/tmp"))
-                            .join("attachments");
-                        let _ = std::fs::create_dir_all(&att_dir);
+                    local
+                        .run_until(async move {
+                            // Clone for receiving, keep original for sending
+                            let mut mgr_send = mgr.clone();
+                            let mgr_download = mgr.clone();
+                            let mut mgr_recv = mgr;
+                            let att_dir = db_path
+                                .parent()
+                                .unwrap_or(std::path::Path::new("/tmp"))
+                                .join("attachments");
+                            let _ = std::fs::create_dir_all(&att_dir);
 
-                        // Request contacts sync
-                        if let Err(e) = mgr_send.request_contacts().await {
-                            warn!("failed to request contacts: {}", e);
-                        }
+                            // Request contacts sync
+                            if let Err(e) = mgr_send.request_contacts().await {
+                                warn!("failed to request contacts: {}", e);
+                            }
 
-                        // Spawn receive loop as a local task
-                        let self_aci_recv = self_aci.clone();
-                        let on_message_recv = on_message.clone();
-                        tokio::task::spawn_local(async move {
-                            loop {
-                                info!("starting receive loop");
-                                match mgr_recv.receive_messages().await {
-                                    Ok(stream) => {
-                                        let self_aci_val = self_aci_recv.lock().await.clone();
-                                        futures::pin_mut!(stream);
+                            // Spawn receive loop as a local task
+                            let self_aci_recv = self_aci.clone();
+                            let on_event_recv = on_event.clone();
+                            tokio::task::spawn_local(async move {
+                                loop {
+                                    info!("starting receive loop");
+                                    match mgr_recv.receive_messages().await {
+                                        Ok(stream) => {
+                                            let self_aci_val = self_aci_recv.lock().await.clone();
+                                            futures::pin_mut!(stream);
 
-                                        while let Some(received) = stream.next().await {
-                                            match received {
-                                                presage::model::messages::Received::QueueEmpty => {
-                                                    info!("message queue synced");
-                                                }
-                                                presage::model::messages::Received::Contacts => {
-                                                    info!("contacts synced");
-                                                }
-                                                presage::model::messages::Received::Content(content) => {
-                                                    let mut chat_msg = match content_to_chat_message(&content, &self_aci_val) {
-                                                        Some(m) => m,
-                                                        None => continue,
-                                                    };
-                                                    download_attachments(&mgr_download, &mut chat_msg, &att_dir).await;
-                                                    enrich_sender_name(&mut chat_msg, mgr_download.store(), &self_aci_val).await;
-                                                    let conv_id = resolve_conversation_id(&content);
-                                                    on_message_recv(conv_id, chat_msg);
+                                            while let Some(received) = stream.next().await {
+                                                match received {
+                                                    presage::model::messages::Received::QueueEmpty => {
+                                                        info!("message queue synced");
+                                                    }
+                                                    presage::model::messages::Received::Contacts => {
+                                                        info!("contacts synced");
+                                                    }
+                                                    presage::model::messages::Received::Content(content) => {
+                                                        process_content(
+                                                            &content,
+                                                            &self_aci_val,
+                                                            &mgr_download,
+                                                            &att_dir,
+                                                            on_event_recv.as_ref(),
+                                                        )
+                                                        .await;
+                                                    }
                                                 }
                                             }
+                                            warn!("receive stream ended, reconnecting...");
                                         }
-                                        warn!("receive stream ended, reconnecting...");
+                                        Err(e) => {
+                                            error!("receive error: {}, retrying in 5s", e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        error!("receive error: {}, retrying in 5s", e);
-                                    }
+                                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                                 }
-                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            }
-                        });
+                            });
 
-                        // Process sends on this task (same LocalSet, same thread)
-                        info!("send handler ready");
-                        while let Some(req) = send_rx.recv().await {
-                            info!("processing send to {}", req.conversation_id);
-                            let result = do_send(&mut mgr_send, &req.conversation_id, &req.body, &req.file_paths).await;
-                            if let Err(ref e) = result {
-                                error!("send failed: {}", e);
-                            } else {
-                                info!("message sent successfully");
+                            // Process sends on this task (same LocalSet, same thread)
+                            info!("send handler ready");
+                            while let Some(req) = send_rx.recv().await {
+                                info!("processing send to {}", req.conversation_id);
+                                let result = do_send(
+                                    &mut mgr_send,
+                                    &req.conversation_id,
+                                    &req.body,
+                                    &req.file_paths,
+                                )
+                                .await;
+                                if let Err(ref e) = result {
+                                    error!("send failed: {}", e);
+                                } else {
+                                    info!("message sent successfully");
+                                }
+                                let _ = req.reply.send(result);
                             }
-                            let _ = req.reply.send(result);
-                        }
-                    }).await;
+                        })
+                        .await;
                 });
             })
             .expect("failed to spawn messaging thread");
@@ -333,12 +343,9 @@ impl MessagingService {
     }
 
     /// Send a text message via the channel to the messaging thread.
-    pub async fn send_message(
-        &self,
-        conversation_id: &str,
-        body: &str,
-    ) -> Result<(), String> {
-        self.send_message_with_attachments(conversation_id, body, vec![]).await
+    pub async fn send_message(&self, conversation_id: &str, body: &str) -> Result<(), String> {
+        self.send_message_with_attachments(conversation_id, body, vec![])
+            .await
     }
 
     /// Send a message with optional attachments via the channel.
@@ -406,9 +413,9 @@ impl MessagingService {
                     .unwrap_or_else(|| uuid_str.clone())
             };
 
-            let service_id = ServiceId::Aci(
-                presage::libsignal_service::protocol::Aci::from(contact.uuid),
-            );
+            let service_id = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from(
+                contact.uuid,
+            ));
             let thread = presage::store::Thread::Contact(service_id);
             let (last_message, last_timestamp) = get_last_message_info(&store, &thread).await;
 
@@ -479,6 +486,25 @@ impl MessagingService {
     }
 }
 
+async fn process_content(
+    content: &Content,
+    self_aci: &Option<String>,
+    mgr_download: &Manager<SqliteStore, Registered>,
+    att_dir: &std::path::Path,
+    on_event: &(dyn Fn(InboundEvent) + Send + Sync),
+) {
+    for mut ev in derive_inbound_events(content, self_aci) {
+        if let InboundEvent::Message {
+            ref mut message, ..
+        } = ev
+        {
+            download_attachments(mgr_download, message, att_dir).await;
+            enrich_sender_name(message, mgr_download.store(), self_aci).await;
+        }
+        on_event(ev);
+    }
+}
+
 async fn do_send(
     mgr: &mut Manager<SqliteStore, Registered>,
     conversation_id: &str,
@@ -539,7 +565,11 @@ async fn do_send(
         }
     }
 
-    let body_opt = if body.is_empty() { None } else { Some(body.to_string()) };
+    let body_opt = if body.is_empty() {
+        None
+    } else {
+        Some(body.to_string())
+    };
 
     match thread {
         presage::store::Thread::Contact(service_id) => {
@@ -668,7 +698,10 @@ fn extract_attachments(dm: &DataMessage) -> Vec<AttachmentInfo> {
             AttachmentInfo {
                 id,
                 file_name: ptr.file_name.clone().unwrap_or_else(|| format!("file-{}", i)),
-                mime_type: ptr.content_type.clone().unwrap_or_else(|| "application/octet-stream".to_string()),
+                mime_type: ptr
+                    .content_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
                 size: ptr.size.unwrap_or(0) as u64,
                 local_path: None,
                 pointer_data: Some(buf),
@@ -683,6 +716,12 @@ fn content_to_chat_message(content: &Content, self_aci: &Option<String>) -> Opti
 
     match &content.body {
         ContentBody::DataMessage(dm) => {
+            // Reaction / delete-only DataMessages are NOT chat messages.
+            // They get fanned out as modifier events instead — keep them out
+            // of the message list to avoid empty bubbles in the UI.
+            if dm.reaction.is_some() || dm.delete.is_some() {
+                return None;
+            }
             let body = dm.body.clone();
             let attachments = extract_attachments(dm);
             // Skip messages with no text and no attachments
@@ -701,6 +740,9 @@ fn content_to_chat_message(content: &Content, self_aci: &Option<String>) -> Opti
         ContentBody::SynchronizeMessage(sync) => {
             if let Some(sent) = &sync.sent {
                 if let Some(dm) = &sent.message {
+                    if dm.reaction.is_some() || dm.delete.is_some() {
+                        return None;
+                    }
                     let body = dm.body.clone();
                     let attachments = extract_attachments(dm);
                     if body.is_none() && attachments.is_empty() {
@@ -720,6 +762,155 @@ fn content_to_chat_message(content: &Content, self_aci: &Option<String>) -> Opti
         }
         _ => None,
     }
+}
+
+/// Best-effort group-id resolution for a `TypingMessage`.
+/// `TypingMessage` carries its own `group_id` (NOT a master key — it's the
+/// derived group ID). We surface it as hex so the frontend has a stable
+/// identifier; if it's missing we fall back to the sender (1:1 chat).
+fn typing_chat_id(tm: &TypingMessage, sender_uuid: &str) -> String {
+    match tm.group_id.as_ref() {
+        Some(gid) if !gid.is_empty() => hex::encode(gid),
+        _ => sender_uuid.to_string(),
+    }
+}
+
+/// Pure, fully-testable extraction of UI-bound events from a single `Content`.
+///
+/// One `Content` may yield multiple events (e.g. a `DataMessage` with both a
+/// body AND a reaction is theoretically valid wire-format). The receive loop
+/// is responsible for downloading attachments only on `Message` events.
+pub fn derive_inbound_events(
+    content: &Content,
+    self_aci: &Option<String>,
+) -> Vec<InboundEvent> {
+    let sender_uuid = content.metadata.sender.raw_uuid().to_string();
+    let chat_id = resolve_conversation_id(content);
+    let mut out: Vec<InboundEvent> = Vec::new();
+
+    match &content.body {
+        ContentBody::DataMessage(dm) => {
+            // Reactions, deletes, and bodies can in principle co-exist; emit
+            // every modifier we find, then fall through to the chat message
+            // factory which already de-dupes empty payloads.
+            push_data_message_modifiers(&mut out, &chat_id, &sender_uuid, dm);
+            if let Some(msg) = content_to_chat_message(content, self_aci) {
+                out.push(InboundEvent::Message {
+                    conversation_id: chat_id.clone(),
+                    message: msg,
+                });
+            }
+        }
+        ContentBody::SynchronizeMessage(SyncMessage {
+            sent: Some(sync_message::Sent {
+                message: Some(dm), ..
+            }),
+            ..
+        }) => {
+            // For sync-from-other-device messages the *sender* of the modifier
+            // is us (self_aci). The frontend renders that distinction.
+            let actor = self_aci.clone().unwrap_or_else(|| sender_uuid.clone());
+            push_data_message_modifiers(&mut out, &chat_id, &actor, dm);
+            if let Some(msg) = content_to_chat_message(content, self_aci) {
+                out.push(InboundEvent::Message {
+                    conversation_id: chat_id.clone(),
+                    message: msg,
+                });
+            }
+        }
+        ContentBody::SynchronizeMessage(SyncMessage {
+            sent: Some(sync_message::Sent {
+                edit_message:
+                    Some(EditMessage {
+                        target_sent_timestamp: Some(ts),
+                        data_message: Some(dm),
+                    }),
+                ..
+            }),
+            ..
+        }) => {
+            // Edit issued by us from another linked device.
+            if let Some(ev) = build_edit_event(&chat_id, *ts, dm) {
+                out.push(InboundEvent::Edited(ev));
+            }
+        }
+        ContentBody::EditMessage(EditMessage {
+            target_sent_timestamp: Some(ts),
+            data_message: Some(dm),
+        }) => {
+            if let Some(ev) = build_edit_event(&chat_id, *ts, dm) {
+                out.push(InboundEvent::Edited(ev));
+            }
+        }
+        ContentBody::ReceiptMessage(ReceiptMessage { r#type, timestamp }) => {
+            if !timestamp.is_empty() {
+                let kind = ReceiptKind::from_proto(r#type.unwrap_or(0));
+                out.push(InboundEvent::Receipt(ReceiptEvent {
+                    chat_id,
+                    message_ids: timestamp.iter().map(|t| t.to_string()).collect(),
+                    kind,
+                    timestamp: content.metadata.timestamp,
+                }));
+            }
+        }
+        ContentBody::TypingMessage(tm) => {
+            let chat_id = typing_chat_id(tm, &sender_uuid);
+            let action = TypingAction::from_proto(tm.action.unwrap_or(0));
+            out.push(InboundEvent::Typing(TypingEvent {
+                chat_id,
+                sender_id: sender_uuid,
+                action,
+            }));
+        }
+        _ => {}
+    }
+
+    out
+}
+
+fn push_data_message_modifiers(
+    out: &mut Vec<InboundEvent>,
+    chat_id: &str,
+    sender_id: &str,
+    dm: &DataMessage,
+) {
+    if let Some(Reaction {
+        emoji,
+        remove,
+        target_sent_timestamp,
+        ..
+    }) = &dm.reaction
+    {
+        if let (Some(emoji), Some(ts)) = (emoji, target_sent_timestamp) {
+            out.push(InboundEvent::Reaction(ReactionEvent {
+                chat_id: chat_id.to_string(),
+                target_message_id: ts.to_string(),
+                emoji: emoji.clone(),
+                sender_id: sender_id.to_string(),
+                remove: remove.unwrap_or(false),
+            }));
+        }
+    }
+
+    if let Some(Delete {
+        target_sent_timestamp: Some(ts),
+    }) = &dm.delete
+    {
+        out.push(InboundEvent::Deleted(DeleteEvent {
+            chat_id: chat_id.to_string(),
+            message_id: ts.to_string(),
+        }));
+    }
+}
+
+fn build_edit_event(chat_id: &str, target_ts: u64, dm: &DataMessage) -> Option<EditEvent> {
+    let new_text = dm.body.clone()?;
+    Some(EditEvent {
+        chat_id: chat_id.to_string(),
+        message_id: target_ts.to_string(),
+        new_text,
+        edited_at: dm.timestamp.unwrap_or(0),
+    })
 }
 
 async fn get_last_message_info(
@@ -801,8 +992,38 @@ async fn enrich_sender_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use presage::libsignal_service::prelude::Uuid;
+    use presage::libsignal_service::content::Metadata;
+    use presage::libsignal_service::proto::{
+        data_message::{Delete as PbDelete, Reaction as PbReaction},
+        receipt_message, typing_message, ReceiptMessage, TypingMessage,
+    };
+    use presage::libsignal_service::protocol::{Aci, ServiceId};
     use presage::model::contacts::Contact;
+    use uuid::Uuid;
+
+    fn aci(uuid: Uuid) -> ServiceId {
+        ServiceId::Aci(Aci::from(uuid))
+    }
+
+    fn metadata(sender: Uuid, ts: u64) -> Metadata {
+        Metadata {
+            sender: aci(sender),
+            destination: aci(Uuid::nil()),
+            sender_device: 1.try_into().unwrap(),
+            timestamp: ts,
+            needs_receipt: false,
+            unidentified_sender: false,
+            was_plaintext: false,
+            server_guid: None,
+        }
+    }
+
+    fn content_with_body(sender: Uuid, ts: u64, body: ContentBody) -> Content {
+        Content {
+            metadata: metadata(sender, ts),
+            body,
+        }
+    }
 
     #[test]
     fn parse_thread_uuid() {
@@ -835,6 +1056,49 @@ mod tests {
             expire_timer_version: 2,
             inbox_position: 0,
             avatar: None,
+        }
+    }
+
+    #[test]
+    fn data_message_with_body_emits_message_event() {
+        let sender = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111);
+        let dm = DataMessage {
+            body: Some("hello world".to_string()),
+            timestamp: Some(1700000000000),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], InboundEvent::Message { .. }));
+    }
+
+    #[test]
+    fn reaction_message_emits_reaction_event() {
+        let sender = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            reaction: Some(PbReaction {
+                emoji: Some("🔥".to_string()),
+                remove: Some(false),
+                target_sent_timestamp: Some(1699999999000),
+                target_author_aci: None,
+                target_author_aci_binary: None,
+            }),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            InboundEvent::Reaction(r) => {
+                assert_eq!(r.emoji, "🔥");
+                assert_eq!(r.target_message_id, "1699999999000");
+                assert_eq!(r.sender_id, sender.to_string());
+                assert_eq!(r.chat_id, sender.to_string());
+                assert!(!r.remove);
+            }
+            other => panic!("expected Reaction, got {other:?}"),
         }
     }
 
@@ -872,5 +1136,187 @@ mod tests {
     fn sender_name_short_uuid_does_not_panic() {
         let name = pick_sender_name(None, "abc");
         assert_eq!(name, "~abc");
+    }
+
+    #[test]
+    fn reaction_remove_flag_propagates() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            reaction: Some(PbReaction {
+                emoji: Some("👍".to_string()),
+                remove: Some(true),
+                target_sent_timestamp: Some(1699999999000),
+                target_author_aci: None,
+                target_author_aci_binary: None,
+            }),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let events = derive_inbound_events(&content, &None);
+        match &events[0] {
+            InboundEvent::Reaction(r) => assert!(r.remove),
+            _ => panic!("expected Reaction"),
+        }
+    }
+
+    #[test]
+    fn delete_message_emits_delete_event() {
+        let sender = Uuid::from_u128(0x4444_4444_4444_4444_4444_4444_4444_4444);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            delete: Some(PbDelete {
+                target_sent_timestamp: Some(1699999999000),
+            }),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            InboundEvent::Deleted(d) => {
+                assert_eq!(d.message_id, "1699999999000");
+                assert_eq!(d.chat_id, sender.to_string());
+            }
+            other => panic!("expected Deleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn edit_message_emits_edited_event() {
+        let sender = Uuid::from_u128(0x5555_5555_5555_5555_5555_5555_5555_5555);
+        let inner = DataMessage {
+            body: Some("edited text".to_string()),
+            timestamp: Some(1700000000500),
+            ..Default::default()
+        };
+        let edit = EditMessage {
+            target_sent_timestamp: Some(1700000000000),
+            data_message: Some(inner),
+        };
+        let content = content_with_body(sender, 1700000000500, ContentBody::EditMessage(edit));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            InboundEvent::Edited(e) => {
+                assert_eq!(e.message_id, "1700000000000");
+                assert_eq!(e.new_text, "edited text");
+                assert_eq!(e.edited_at, 1700000000500);
+            }
+            other => panic!("expected Edited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn receipt_message_emits_receipt_event() {
+        let sender = Uuid::from_u128(0x6666_6666_6666_6666_6666_6666_6666_6666);
+        let receipt = ReceiptMessage {
+            r#type: Some(receipt_message::Type::Read as i32),
+            timestamp: vec![1700000000000, 1700000000100],
+        };
+        let content = content_with_body(sender, 1700000000200, ContentBody::ReceiptMessage(receipt));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            InboundEvent::Receipt(r) => {
+                assert_eq!(r.kind, ReceiptKind::Read);
+                assert_eq!(r.message_ids, vec!["1700000000000", "1700000000100"]);
+                assert_eq!(r.chat_id, sender.to_string());
+            }
+            other => panic!("expected Receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_receipt_is_dropped() {
+        // Defensive: a malformed receipt with no timestamps should be ignored
+        // rather than emitting a noise event with an empty list.
+        let sender = Uuid::from_u128(0x7777_7777_7777_7777_7777_7777_7777_7777);
+        let receipt = ReceiptMessage {
+            r#type: Some(0),
+            timestamp: vec![],
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::ReceiptMessage(receipt));
+        let events = derive_inbound_events(&content, &None);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn typing_message_emits_typing_event() {
+        let sender = Uuid::from_u128(0x8888_8888_8888_8888_8888_8888_8888_8888);
+        let typing = TypingMessage {
+            timestamp: Some(1700000000000),
+            action: Some(typing_message::Action::Started as i32),
+            group_id: None,
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::TypingMessage(typing));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            InboundEvent::Typing(t) => {
+                assert_eq!(t.action, TypingAction::Started);
+                assert_eq!(t.sender_id, sender.to_string());
+                assert_eq!(t.chat_id, sender.to_string());
+            }
+            other => panic!("expected Typing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typing_message_with_group_id_uses_hex_chat_id() {
+        let sender = Uuid::from_u128(0x9999_9999_9999_9999_9999_9999_9999_9999);
+        let group_id = vec![0xAB; 16];
+        let typing = TypingMessage {
+            timestamp: Some(1700000000000),
+            action: Some(typing_message::Action::Stopped as i32),
+            group_id: Some(group_id.clone()),
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::TypingMessage(typing));
+        let events = derive_inbound_events(&content, &None);
+        match &events[0] {
+            InboundEvent::Typing(t) => {
+                assert_eq!(t.chat_id, hex::encode(&group_id));
+                assert_eq!(t.action, TypingAction::Stopped);
+            }
+            _ => panic!("expected Typing"),
+        }
+    }
+
+    #[test]
+    fn null_message_yields_no_events() {
+        // Sentinel: presage uses NullMessage to tombstone deletions in the
+        // local store. We MUST NOT emit anything for those — they're internal.
+        let sender = Uuid::from_u128(0xAAAA_AAAA_AAAA_AAAA_AAAA_AAAA_AAAA_AAAA);
+        let content = content_with_body(
+            sender,
+            1700000000000,
+            ContentBody::NullMessage(presage::libsignal_service::proto::NullMessage::default()),
+        );
+        let events = derive_inbound_events(&content, &None);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn data_message_with_only_reaction_does_not_emit_chat_message() {
+        // Regression guard: the old `_ => None` arm in content_to_chat_message
+        // accidentally produced empty bubbles when the only thing the message
+        // carried was a reaction. We now suppress the chat-message slot for
+        // reaction-only and delete-only DataMessages.
+        let sender = Uuid::from_u128(0xBBBB_BBBB_BBBB_BBBB_BBBB_BBBB_BBBB_BBBB);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            reaction: Some(PbReaction {
+                emoji: Some("❤️".to_string()),
+                remove: Some(false),
+                target_sent_timestamp: Some(1699999999000),
+                target_author_aci: None,
+                target_author_aci_binary: None,
+            }),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let events = derive_inbound_events(&content, &None);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], InboundEvent::Reaction(_)));
     }
 }
