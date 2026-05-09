@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { messagingStore } from "../stores/messaging.svelte";
@@ -10,20 +9,15 @@
   let showNewMessage = $state(false);
   let newRecipient = $state("");
   let newMessageText = $state("");
-  let sendError = $state("");
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
 
   onMount(async () => {
     await messagingStore.loadSelfId();
     await messagingStore.loadConversations();
-
-    // Poll for conversations while empty (contacts sync may take time)
-    const interval = setInterval(async () => {
-      await messagingStore.loadConversations();
-    }, 5000);
-
-    return () => clearInterval(interval);
+    // No 5s poll: the backend emits `conversations-updated` whenever
+    // contacts sync or a new message arrives. The messaging store re-fetches
+    // on that event (see messaging.svelte.ts:initListeners).
   });
 
   function selectConversation(id: string) {
@@ -81,10 +75,9 @@
     const recipient = newRecipient.trim();
     const text = newMessageText.trim();
     if (!recipient || !text) return;
-    sendError = "";
 
     try {
-      await invoke("send_to_recipient", { recipientId: recipient, body: text });
+      await messagingStore.sendToRecipient(recipient, text);
       // Switch to this conversation
       messagingStore.activeConversationId = recipient;
       showNewMessage = false;
@@ -93,8 +86,9 @@
       // Refresh conversations
       await messagingStore.loadConversations();
       await messagingStore.loadMessages(recipient);
-    } catch (e) {
-      sendError = String(e);
+    } catch {
+      // Toast already pushed by sendToRecipient — keep the form open so the
+      // user can correct the recipient and try again.
     }
   }
 
@@ -183,7 +177,7 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <h1>SignalUI</h1>
-      <button class="new-msg-btn" onclick={() => (showNewMessage = true)} title="New Message">
+      <button class="new-msg-btn" onclick={() => (showNewMessage = true)} title="Nouveau message">
         +
       </button>
     </div>
@@ -192,8 +186,8 @@
         <div class="empty-conversations">
           <div class="sync-indicator">
             <div class="spinner-small"></div>
-            <p>Syncing contacts...</p>
-            <p class="sync-hint">Send yourself a message to start</p>
+            <p>Synchronisation des contacts…</p>
+            <p class="sync-hint">Envoyez-vous un message pour commencer</p>
           </div>
         </div>
       {:else}
@@ -220,20 +214,20 @@
   <main class="chat-area">
     {#if showNewMessage}
       <div class="chat-header">
-        <h2>New Message</h2>
+        <h2>Nouveau message</h2>
       </div>
       <div class="new-message-form">
         <div class="form-field">
-          <label for="recipient">Recipient UUID</label>
+          <label for="recipient">UUID du destinataire</label>
           <input
             id="recipient"
             type="text"
-            placeholder="Enter contact UUID (e.g. from Signal)"
+            placeholder="UUID du contact (depuis Signal)"
             bind:value={newRecipient}
           />
           {#if messagingStore.selfId}
             <button class="self-btn" onclick={() => (newRecipient = messagingStore.selfId ?? "")}>
-              Note to Self
+              Note à moi-même
             </button>
           {/if}
         </div>
@@ -242,17 +236,14 @@
           <input
             id="new-msg"
             type="text"
-            placeholder="Type your message..."
+            placeholder="Tapez votre message…"
             bind:value={newMessageText}
             onkeydown={handleNewMsgKeydown}
           />
         </div>
-        {#if sendError}
-          <p class="send-error">{sendError}</p>
-        {/if}
         <div class="form-actions">
-          <button class="secondary-btn" onclick={() => (showNewMessage = false)}>Cancel</button>
-          <button class="primary-btn" onclick={handleNewMessageSend}>Send</button>
+          <button class="secondary-btn" onclick={() => (showNewMessage = false)}>Annuler</button>
+          <button class="primary-btn" onclick={handleNewMessageSend}>Envoyer</button>
         </div>
       </div>
 
@@ -325,21 +316,21 @@
         </div>
       {/if}
       <div class="composer">
-        <button class="attach-btn" onclick={handleAttachFile} title="Attach file">
+        <button class="attach-btn" onclick={handleAttachFile} title="Joindre un fichier">
           📎
         </button>
         <input
           type="text"
-          placeholder="Message..."
+          placeholder="Message…"
           bind:value={inputText}
           onkeydown={handleKeydown}
         />
-        <button class="send-btn" onclick={handleSend}>Send</button>
+        <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
 
     {:else}
       <div class="empty-state">
-        <p>Select a conversation or start a new one</p>
+        <p>Sélectionnez une conversation ou démarrez-en une nouvelle</p>
       </div>
     {/if}
   </main>
@@ -428,12 +419,6 @@
   .self-btn:hover {
     background: var(--accent, #3b82f6);
     color: white;
-  }
-
-  .send-error {
-    color: #ef4444;
-    font-size: 0.85rem;
-    margin: 0;
   }
 
   .form-actions {
