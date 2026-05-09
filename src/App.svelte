@@ -3,6 +3,7 @@
   import { provisioningStore } from "./lib/stores/provisioning.svelte";
   import LinkDevice from "./lib/components/LinkDevice.svelte";
   import ChatLayout from "./lib/components/ChatLayout.svelte";
+  import ToastContainer from "./lib/components/ToastContainer.svelte";
 
   let loading = $state(true);
 
@@ -24,6 +25,8 @@
 {:else}
   <LinkDevice />
 {/if}
+
+<ToastContainer />
 
 <style>
   .loading {

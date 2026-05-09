@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Conversation, ChatMessage } from "../types";
+import { toastStore } from "./toasts.svelte";
 
 // --- Modifier event payloads (mirror src-tauri/src/messaging/types.rs) ---
 
@@ -177,6 +178,9 @@ export function createMessagingStore() {
       await loadConversations();
     } catch (e) {
       console.error("Failed to send message:", e);
+      toastStore.error("Échec de l'envoi", () =>
+        sendMessage(conversationId, body)
+      );
     }
   }
 
@@ -195,6 +199,9 @@ export function createMessagingStore() {
       await loadMessages(conversationId);
     } catch (e) {
       console.error("Failed to send with attachments:", e);
+      toastStore.error("Échec de l'envoi", () =>
+        sendMessageWithAttachments(conversationId, body, filePaths)
+      );
       throw e;
     }
   }
