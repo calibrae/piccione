@@ -8,14 +8,59 @@ use app_state::AppState;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::{fmt, EnvFilter};
 
-fn make_on_message(app: tauri::AppHandle) -> impl Fn(String, messaging::types::ChatMessage) + Send + Sync + 'static {
-    move |conv_id, msg| {
-        let _ = app.emit("new-message", serde_json::json!({
-            "conversation_id": conv_id,
-            "message": msg,
-        }));
-        let _ = app.emit("conversations-updated", ());
+use crate::messaging::types::InboundEvent;
+
+/// Build a callback that fans out `InboundEvent`s to Tauri events.
+///
+/// The frontend listens for one event name per modifier kind; the receive
+/// loop is intentionally agnostic about transport, so all the dispatch
+/// lives here.
+fn make_on_event(
+    app: tauri::AppHandle,
+) -> impl Fn(InboundEvent) + Send + Sync + 'static {
+    move |event| match event {
+        InboundEvent::Message {
+            conversation_id,
+            message,
+        } => {
+            let _ = app.emit(
+                "new-message",
+                serde_json::json!({
+                    "conversation_id": conversation_id,
+                    "message": message,
+                }),
+            );
+            let _ = app.emit("conversations-updated", ());
+        }
+        InboundEvent::Receipt(payload) => {
+            let _ = app.emit("read-receipt", payload);
+        }
+        InboundEvent::Typing(payload) => {
+            let _ = app.emit("typing-indicator", payload);
+        }
+        InboundEvent::Reaction(payload) => {
+            let _ = app.emit("reaction", payload);
+        }
+        InboundEvent::Edited(payload) => {
+            let _ = app.emit("message-edited", payload);
+            // The conversation list summary is derived from the latest
+            // DataMessage body — refresh so an edit to the most-recent
+            // message is reflected in the sidebar.
+            let _ = app.emit("conversations-updated", ());
+        }
+        InboundEvent::Deleted(payload) => {
+            let _ = app.emit("message-deleted", payload);
+            let _ = app.emit("conversations-updated", ());
+        }
     }
+}
+
+/// Backwards-compat alias for the provisioning module which spelt the helper
+/// `make_on_message`. Renaming the symbol is a separate swimlane's call.
+pub(crate) fn make_on_message(
+    app: tauri::AppHandle,
+) -> impl Fn(InboundEvent) + Send + Sync + 'static {
+    make_on_event(app)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -54,8 +99,8 @@ pub fn run() {
                         local.run_until(async move {
                             let state = app_handle.state::<AppState>();
                             let passphrase = state.db_passphrase_str();
-                            let on_message = make_on_message(app_handle.clone());
-                            state.messaging.try_load_and_start(passphrase, on_message).await;
+                            let on_event = make_on_event(app_handle.clone());
+                            state.messaging.try_load_and_start(passphrase, on_event).await;
                         }).await;
                     });
                 })

@@ -47,6 +47,102 @@ pub struct SendWithAttachmentsRequest {
     pub file_paths: Vec<String>,
 }
 
+/// Read receipt kind, mirrors the on-wire ReceiptMessage.Type enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReceiptKind {
+    Delivered,
+    Read,
+    Viewed,
+}
+
+impl ReceiptKind {
+    /// Map the proto enum (DELIVERY=0, READ=1, VIEWED=2) to our public form.
+    /// Anything we don't recognise is treated as `Delivered`.
+    pub fn from_proto(value: i32) -> Self {
+        match value {
+            1 => ReceiptKind::Read,
+            2 => ReceiptKind::Viewed,
+            _ => ReceiptKind::Delivered,
+        }
+    }
+}
+
+/// Typing indicator action.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TypingAction {
+    Started,
+    Stopped,
+}
+
+impl TypingAction {
+    pub fn from_proto(value: i32) -> Self {
+        match value {
+            1 => TypingAction::Stopped,
+            _ => TypingAction::Started,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReceiptEvent {
+    pub chat_id: String,
+    pub message_ids: Vec<String>,
+    #[serde(rename = "type")]
+    pub kind: ReceiptKind,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TypingEvent {
+    pub chat_id: String,
+    pub sender_id: String,
+    pub action: TypingAction,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReactionEvent {
+    pub chat_id: String,
+    pub target_message_id: String,
+    pub emoji: String,
+    pub sender_id: String,
+    pub remove: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EditEvent {
+    pub chat_id: String,
+    pub message_id: String,
+    pub new_text: String,
+    pub edited_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DeleteEvent {
+    pub chat_id: String,
+    pub message_id: String,
+}
+
+/// Anything the receive loop wants to surface to the Tauri layer.
+///
+/// One incoming `Content` may produce zero or more events: a `DataMessage`
+/// carrying both a body and a reaction is rare in practice, but the modeling
+/// keeps that door open and decouples the wire format from the UI bus.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum InboundEvent {
+    Message {
+        conversation_id: String,
+        message: ChatMessage,
+    },
+    Receipt(ReceiptEvent),
+    Typing(TypingEvent),
+    Reaction(ReactionEvent),
+    Edited(EditEvent),
+    Deleted(DeleteEvent),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +190,52 @@ mod tests {
         let json = serde_json::to_value(&att).unwrap();
         assert_eq!(json["mime_type"], "image/jpeg");
         assert_eq!(json["local_path"], "/tmp/photo.jpg");
+    }
+
+    #[test]
+    fn receipt_kind_from_proto() {
+        assert_eq!(ReceiptKind::from_proto(0), ReceiptKind::Delivered);
+        assert_eq!(ReceiptKind::from_proto(1), ReceiptKind::Read);
+        assert_eq!(ReceiptKind::from_proto(2), ReceiptKind::Viewed);
+        // Anything outside the spec is conservatively flagged as delivered
+        // rather than dropping the receipt entirely.
+        assert_eq!(ReceiptKind::from_proto(99), ReceiptKind::Delivered);
+    }
+
+    #[test]
+    fn typing_action_from_proto() {
+        assert_eq!(TypingAction::from_proto(0), TypingAction::Started);
+        assert_eq!(TypingAction::from_proto(1), TypingAction::Stopped);
+        // Unknown actions default to Started so the UI shows the indicator.
+        assert_eq!(TypingAction::from_proto(7), TypingAction::Started);
+    }
+
+    #[test]
+    fn receipt_event_serializes_with_type_field() {
+        let ev = ReceiptEvent {
+            chat_id: "uuid-1".to_string(),
+            message_ids: vec!["1700000000000".to_string()],
+            kind: ReceiptKind::Read,
+            timestamp: 1700000000001,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        // The frontend protocol calls this field `type`.
+        assert_eq!(json["type"], "read");
+        assert_eq!(json["chat_id"], "uuid-1");
+        assert_eq!(json["message_ids"][0], "1700000000000");
+    }
+
+    #[test]
+    fn reaction_event_serializes() {
+        let ev = ReactionEvent {
+            chat_id: "uuid-1".to_string(),
+            target_message_id: "1700000000000".to_string(),
+            emoji: "🔥".to_string(),
+            sender_id: "uuid-2".to_string(),
+            remove: false,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["emoji"], "🔥");
+        assert_eq!(json["remove"], false);
     }
 }
