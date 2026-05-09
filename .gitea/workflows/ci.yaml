@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: macos-arm64
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Build & test
         env:
@@ -34,6 +34,10 @@ jobs:
           # Rust backend
           cd src-tauri
           cargo check --offline || cargo check
+          # Debug lane — fast feedback, mirrors local dev.
+          cargo test --lib
+          # Release lane — catches optimisation-level bugs (zeroizing bounds,
+          # rustc lint changes, unused-but-LTOd code paths).
           cargo test --lib --release
 
           # ⚠ DO NOT run `npm run tauri dev` — needs DISPLAY, will hang the runner
