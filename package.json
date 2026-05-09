@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "predev": "node ./scripts/check-port.mjs 1420",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
