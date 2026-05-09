@@ -1,6 +1,7 @@
 mod app_state;
 mod commands;
 mod messaging;
+pub mod pair_flow;
 mod provisioning;
 mod store;
 

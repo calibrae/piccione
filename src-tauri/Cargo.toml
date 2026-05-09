@@ -15,6 +15,14 @@ path = "src/main.rs"
 name = "pair-once"
 path = "src/bin/pair_once.rs"
 
+[[bin]]
+name = "is-paired"
+path = "src/bin/is_paired.rs"
+
+[[bin]]
+name = "list-devices"
+path = "src/bin/list_devices.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
