@@ -1,46 +1,119 @@
+//! Database passphrase storage.
+//!
+//! Strategy:
+//!   1. Prefer macOS Keychain (`security-framework`).
+//!   2. If Keychain is empty but a legacy `.db_key` file exists, migrate it
+//!      into the Keychain. The file is renamed to `.db_key.bak` instead of
+//!      deleted, so a Keychain corruption does not lock Cali out of his
+//!      messages while the feature is still young.
+//!   3. If neither exists, generate a fresh 64-hex passphrase, store it in
+//!      the Keychain, and write a `.db_key` mirror as a belt-and-braces
+//!      fallback (also 0600).
+//!
+//! The whole module is generic over a tiny [`KeychainBackend`] trait so the
+//! tests can swap in an in-memory HashMap and stay deterministic.
+
 use security_framework::base::Error as SfError;
 use security_framework::passwords::{
     delete_generic_password, get_generic_password, set_generic_password,
 };
 use zeroize::Zeroizing;
 
-const SERVICE_NAME: &str = "com.signalui.app";
-const DB_KEY_ACCOUNT: &str = "signalui-db-encryption-key";
+pub const SERVICE_NAME: &str = "com.signalui.app";
+pub const DB_KEY_ACCOUNT: &str = "signalui-db-encryption-key";
 
-// macOS Security framework error code for "item not found"
+/// macOS Security framework error code for "item not found".
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
-/// Retrieve or generate the database encryption passphrase.
-///
-/// Uses a file-based key stored alongside the database.
-/// File permissions are set to 0600 (owner-only).
-/// For production builds, this should be migrated to Keychain.
-pub fn get_or_create_db_passphrase(data_dir: &std::path::Path) -> Result<Zeroizing<String>, KeychainError> {
+/// Abstract keychain operations so we can mock them in tests.
+pub trait KeychainBackend: Send + Sync {
+    /// Returns `Ok(None)` if the item is missing.
+    fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, KeychainError>;
+    fn set(&self, service: &str, account: &str, password: &[u8]) -> Result<(), KeychainError>;
+    /// Deleting a non-existent item is a no-op and returns `Ok(())`.
+    fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError>;
+}
+
+/// Real macOS Keychain backed by `security-framework`.
+pub struct SystemKeychain;
+
+impl KeychainBackend for SystemKeychain {
+    fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, KeychainError> {
+        match get_generic_password(service, account) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(KeychainError::AccessFailed(e.to_string())),
+        }
+    }
+
+    fn set(&self, service: &str, account: &str, password: &[u8]) -> Result<(), KeychainError> {
+        set_generic_password(service, account, password)
+            .map_err(|e| KeychainError::StoreFailed(e.to_string()))
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError> {
+        match delete_generic_password(service, account) {
+            Ok(()) => Ok(()),
+            Err(e) if is_not_found(&e) => Ok(()),
+            Err(e) => Err(KeychainError::DeleteFailed(e.to_string())),
+        }
+    }
+}
+
+fn is_not_found(e: &SfError) -> bool {
+    e.code() == ERR_SEC_ITEM_NOT_FOUND
+}
+
+/// Public entry point — production code uses this.
+pub fn get_or_create_db_passphrase(
+    data_dir: &std::path::Path,
+) -> Result<Zeroizing<String>, KeychainError> {
+    get_or_create_db_passphrase_with(&SystemKeychain, data_dir)
+}
+
+/// Implementation generic over a [`KeychainBackend`] for testability.
+pub fn get_or_create_db_passphrase_with<K: KeychainBackend>(
+    keychain: &K,
+    data_dir: &std::path::Path,
+) -> Result<Zeroizing<String>, KeychainError> {
     let key_file = data_dir.join(".db_key");
 
-    if key_file.exists() {
-        let key = std::fs::read_to_string(&key_file)
-            .map_err(|e| KeychainError::AccessFailed(format!("failed to read key file: {}", e)))?;
-        tracing::debug!("loaded database encryption key from file");
-        Ok(Zeroizing::new(key.trim().to_string()))
-    } else {
-        let passphrase = generate_passphrase();
-        std::fs::write(&key_file, passphrase.as_bytes())
-            .map_err(|e| KeychainError::StoreFailed(format!("failed to write key file: {}", e)))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
-        }
-        tracing::info!("created database encryption key in file");
-        Ok(passphrase)
+    // 1. Keychain hit — fastest, preferred path.
+    if let Some(bytes) = keychain.get(SERVICE_NAME, DB_KEY_ACCOUNT)? {
+        let s = String::from_utf8(bytes).map_err(|_| KeychainError::InvalidData)?;
+        tracing::debug!("loaded database encryption key from keychain");
+        return Ok(Zeroizing::new(s.trim().to_string()));
     }
+
+    // 2. Migrate from legacy .db_key file if present.
+    if key_file.exists() {
+        let raw = std::fs::read_to_string(&key_file)
+            .map_err(|e| KeychainError::AccessFailed(format!("read .db_key: {}", e)))?;
+        let trimmed = raw.trim().to_string();
+        keychain.set(SERVICE_NAME, DB_KEY_ACCOUNT, trimmed.as_bytes())?;
+
+        // Rename to .db_key.bak so a future bug can't silently fall back to a
+        // stale on-disk key, but Cali can recover by hand if the keychain
+        // entry is wiped. He can `rm .db_key.bak` once he trusts the migration.
+        let bak = data_dir.join(".db_key.bak");
+        if let Err(e) = std::fs::rename(&key_file, &bak) {
+            tracing::warn!("could not rename .db_key -> .db_key.bak: {}", e);
+        } else {
+            tracing::info!("migrated .db_key into keychain (file kept at .db_key.bak)");
+        }
+        return Ok(Zeroizing::new(trimmed));
+    }
+
+    // 3. Cold start — generate a fresh passphrase, store it in the keychain.
+    let passphrase = generate_passphrase();
+    keychain.set(SERVICE_NAME, DB_KEY_ACCOUNT, passphrase.as_bytes())?;
+    tracing::info!("created fresh database encryption key in keychain");
+    Ok(passphrase)
 }
 
 /// Delete the database encryption key from the Keychain.
 pub fn delete_db_passphrase() -> Result<(), KeychainError> {
-    delete_generic_password(SERVICE_NAME, DB_KEY_ACCOUNT)
-        .map_err(|e| KeychainError::DeleteFailed(e.to_string()))
+    SystemKeychain.delete(SERVICE_NAME, DB_KEY_ACCOUNT)
 }
 
 fn generate_passphrase() -> Zeroizing<String> {
@@ -69,6 +142,39 @@ pub enum KeychainError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// In-memory keychain used by tests.
+    #[derive(Default)]
+    struct MemoryKeychain {
+        store: Mutex<HashMap<(String, String), Vec<u8>>>,
+    }
+
+    impl KeychainBackend for MemoryKeychain {
+        fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, KeychainError> {
+            Ok(self
+                .store
+                .lock()
+                .unwrap()
+                .get(&(service.to_string(), account.to_string()))
+                .cloned())
+        }
+        fn set(&self, service: &str, account: &str, password: &[u8]) -> Result<(), KeychainError> {
+            self.store
+                .lock()
+                .unwrap()
+                .insert((service.to_string(), account.to_string()), password.to_vec());
+            Ok(())
+        }
+        fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError> {
+            self.store
+                .lock()
+                .unwrap()
+                .remove(&(service.to_string(), account.to_string()));
+            Ok(())
+        }
+    }
 
     #[test]
     fn generate_passphrase_is_64_hex_chars() {
@@ -83,4 +189,95 @@ mod tests {
         let p2 = generate_passphrase();
         assert_ne!(*p1, *p2);
     }
+
+    #[test]
+    fn memory_backend_round_trip() {
+        let kc = MemoryKeychain::default();
+        assert!(kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().is_none());
+        kc.set(SERVICE_NAME, DB_KEY_ACCOUNT, b"hunter2").unwrap();
+        assert_eq!(
+            kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().as_deref(),
+            Some(b"hunter2".as_ref())
+        );
+        kc.delete(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap();
+        assert!(kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().is_none());
+    }
+
+    #[test]
+    fn cold_start_generates_and_stores_in_keychain() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+
+        let p = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(p.len(), 64);
+        let stored = kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().unwrap();
+        assert_eq!(stored, p.as_bytes());
+
+        // No .db_key written when keychain works.
+        assert!(!dir.path().join(".db_key").exists());
+    }
+
+    #[test]
+    fn keychain_hit_returns_existing() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+        kc.set(SERVICE_NAME, DB_KEY_ACCOUNT, b"deadbeef").unwrap();
+
+        let p = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(p.as_str(), "deadbeef");
+    }
+
+    #[test]
+    fn migrates_legacy_db_key_file() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+        std::fs::write(dir.path().join(".db_key"), "legacy-passphrase\n").unwrap();
+
+        let p = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(p.as_str(), "legacy-passphrase");
+
+        // Stored in keychain.
+        assert_eq!(
+            kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().unwrap(),
+            b"legacy-passphrase"
+        );
+        // Original file moved to .bak.
+        assert!(!dir.path().join(".db_key").exists());
+        assert!(dir.path().join(".db_key.bak").exists());
+    }
+
+    #[test]
+    fn second_call_uses_keychain_not_filesystem() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+
+        let p1 = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        let p2 = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+        assert_eq!(p1.as_str(), p2.as_str());
+    }
+
+    /// Ad-hoc tempdir helper — avoids pulling in the `tempfile` crate just for two tests.
+    struct TmpDir(std::path::PathBuf);
+    impl TmpDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn tempdir() -> TmpDir {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pid = std::process::id();
+        let counter = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("signalui-kc-{}-{}-{}", pid, nanos, counter));
+        std::fs::create_dir_all(&path).unwrap();
+        TmpDir(path)
+    }
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 }
