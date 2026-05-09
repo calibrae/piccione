@@ -30,7 +30,7 @@ use presage::Manager;
 use presage_store_sqlite::SqliteStore;
 use qrcode::QrCode;
 use signalui_lib::pair_flow::{run_pair, PairOutcome, QrResult};
-use signalui_lib::store::keychain::get_or_create_db_passphrase;
+use signalui_lib::store::keychain::resolve_db_passphrase_for_cli;
 
 const DEVICE_NAME: &str = "signalui-pair-once";
 const QR_PATH: &str = "/tmp/signalui-pair.png";
@@ -79,7 +79,7 @@ fn main() {
         fail(format!("failed to create data dir {:?}: {}", data, e));
     }
 
-    let passphrase = match get_or_create_db_passphrase(&data) {
+    let passphrase = match resolve_db_passphrase_for_cli(&data) {
         Ok(p) => p,
         Err(e) => fail(format!("failed to load passphrase: {}", e)),
     };

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use presage::model::identity::OnNewIdentity;
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
-use signalui_lib::store::keychain::get_or_create_db_passphrase;
+use signalui_lib::store::keychain::resolve_db_passphrase_for_cli;
 
 const APP_BUNDLE_ID: &str = "com.signalui.app";
 
@@ -41,7 +41,7 @@ fn main() {
     if let Err(e) = std::fs::create_dir_all(&data) {
         fail(format!("create data dir: {e}"));
     }
-    let passphrase = match get_or_create_db_passphrase(&data) {
+    let passphrase = match resolve_db_passphrase_for_cli(&data) {
         Ok(p) => p,
         Err(e) => fail(format!("passphrase: {e}")),
     };
