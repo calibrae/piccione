@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Conversation, ChatMessage } from "../types";
+import { toastStore } from "./toasts.svelte";
 
 export function createMessagingStore() {
   let conversations = $state<Conversation[]>([]);
@@ -65,6 +66,9 @@ export function createMessagingStore() {
       await loadConversations();
     } catch (e) {
       console.error("Failed to send message:", e);
+      toastStore.error("Échec de l'envoi", () =>
+        sendMessage(conversationId, body)
+      );
     }
   }
 
@@ -83,6 +87,9 @@ export function createMessagingStore() {
       await loadMessages(conversationId);
     } catch (e) {
       console.error("Failed to send with attachments:", e);
+      toastStore.error("Échec de l'envoi", () =>
+        sendMessageWithAttachments(conversationId, body, filePaths)
+      );
       throw e;
     }
   }

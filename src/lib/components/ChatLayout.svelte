@@ -6,13 +6,13 @@
   import { messagingStore } from "../stores/messaging.svelte";
 
   let inputText = $state("");
-  let messagesContainer: HTMLDivElement;
+  let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
   let showNewMessage = $state(false);
   let newRecipient = $state("");
   let newMessageText = $state("");
   let sendError = $state("");
   let pendingFiles = $state<string[]>([]);
-  let sending = $state(false);
+  let lightboxSrc = $state<string | null>(null);
 
   onMount(async () => {
     await messagingStore.loadSelfId();
@@ -40,9 +40,10 @@
     inputText = "";
     pendingFiles = [];
 
-    // Don't block the UI — fire and forget
+    // Don't block the UI — fire and forget.
+    // Errors surface as toasts via the messaging store.
     if (files.length > 0) {
-      messagingStore.sendMessageWithAttachments(convId, body, files);
+      messagingStore.sendMessageWithAttachments(convId, body, files).catch(() => {});
     } else {
       messagingStore.sendMessage(convId, body);
     }
@@ -117,6 +118,12 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  function fileExt(name: string): string {
+    const idx = name.lastIndexOf(".");
+    if (idx < 0 || idx === name.length - 1) return "FILE";
+    return name.slice(idx + 1).toUpperCase().slice(0, 5);
+  }
+
   function formatTime(timestamp: number): string {
     if (!timestamp) return "";
     const date = new Date(timestamp);
@@ -134,11 +141,14 @@
       : []
   );
 
-  // Auto-scroll when messages change
+  // Auto-scroll when messages change. messagesContainer is now $state-tracked,
+  // so this effect fires both on container mount and on message-list growth.
   $effect(() => {
-    if (activeMessages.length > 0 && messagesContainer) {
+    const container = messagesContainer;
+    const count = activeMessages.length;
+    if (count > 0 && container) {
       requestAnimationFrame(() => {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        container.scrollTop = container.scrollHeight;
       });
     }
   });
@@ -148,6 +158,25 @@
       (c) => c.id === messagingStore.activeConversationId
     )
   );
+
+  function openLightbox(src: string) {
+    lightboxSrc = src;
+  }
+
+  function closeLightbox() {
+    lightboxSrc = null;
+  }
+
+  async function openAttachment(att: { local_path: string | null }) {
+    if (!att.local_path) return;
+    try {
+      // Best-effort: open the file in the system handler if the opener plugin is wired.
+      // Fallback: convertFileSrc + window.open lets WebKit preview most types.
+      window.open(convertFileSrc(att.local_path), "_blank");
+    } catch (e) {
+      console.error("Open attachment failed:", e);
+    }
+  }
 </script>
 
 <div class="layout">
@@ -231,7 +260,7 @@
       <div class="chat-header">
         <h2>{activeConversation.name}</h2>
       </div>
-      <div class="messages" bind:this={messagesContainer}>
+      <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
         {#each activeMessages as msg}
           <div class="message" class:outgoing={msg.is_outgoing}>
             <div class="bubble">
@@ -239,21 +268,39 @@
                 <div class="attachments">
                   {#each msg.attachments as att}
                     {#if att.mime_type.startsWith("image/") && att.local_path}
-                      <img
-                        class="attachment-image"
-                        src={convertFileSrc(att.local_path)}
-                        alt={att.file_name}
-                        loading="lazy"
-                      />
+                      <button
+                        type="button"
+                        class="attachment-image-btn"
+                        onclick={() => openLightbox(convertFileSrc(att.local_path!))}
+                        aria-label={`Agrandir ${att.file_name}`}
+                      >
+                        <img
+                          class="attachment-image"
+                          src={convertFileSrc(att.local_path)}
+                          alt={att.file_name}
+                          loading="lazy"
+                        />
+                      </button>
                     {:else if att.mime_type.startsWith("image/")}
-                      <div class="attachment-placeholder">
-                        {att.file_name} ({formatSize(att.size)})
+                      <div class="attachment-placeholder" data-testid="attachment-pending">
+                        🖼️ {att.file_name} ({formatSize(att.size)})
                       </div>
                     {:else}
-                      <div class="attachment-file">
-                        <span class="att-icon">📎</span>
-                        <span class="att-name">{att.file_name}</span>
-                        <span class="att-size">{formatSize(att.size)}</span>
+                      <div class="attachment-file" data-testid="attachment-file">
+                        <span class="att-ext" aria-hidden="true">{fileExt(att.file_name)}</span>
+                        <div class="att-meta">
+                          <span class="att-name">{att.file_name}</span>
+                          <span class="att-size">{formatSize(att.size)}</span>
+                        </div>
+                        {#if att.local_path}
+                          <button
+                            class="att-open"
+                            onclick={() => openAttachment(att)}
+                            aria-label={`Ouvrir ${att.file_name}`}
+                          >
+                            Ouvrir
+                          </button>
+                        {/if}
                       </div>
                     {/if}
                   {/each}
@@ -297,6 +344,20 @@
     {/if}
   </main>
 </div>
+
+{#if lightboxSrc}
+  <div
+    class="lightbox"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Pièce jointe agrandie"
+    onclick={closeLightbox}
+    onkeydown={(e) => { if (e.key === "Escape") closeLightbox(); }}
+    tabindex="-1"
+  >
+    <img src={lightboxSrc} alt="" class="lightbox-img" />
+  </div>
+{/if}
 
 <style>
   .new-msg-btn {
@@ -413,11 +474,20 @@
     margin-bottom: 4px;
   }
 
+  .attachment-image-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: zoom-in;
+    line-height: 0;
+  }
+
   .attachment-image {
-    max-width: 300px;
-    max-height: 400px;
+    max-width: 280px;
+    max-height: 280px;
     border-radius: 8px;
-    object-fit: contain;
+    object-fit: cover;
+    display: block;
   }
 
   .attachment-placeholder {
@@ -431,21 +501,57 @@
   .attachment-file {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     padding: 8px 10px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 6px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 8px;
     font-size: 0.85rem;
+    min-width: 220px;
+  }
+
+  .att-ext {
+    background: var(--accent, #3b82f6);
+    color: white;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+
+  .att-meta {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
   }
 
   .att-name {
-    color: var(--accent, #3b82f6);
-    flex: 1;
+    color: var(--text-primary, #e4e4e7);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .att-size {
     color: var(--text-secondary, #a1a1aa);
     font-size: 0.75rem;
+  }
+
+  .att-open {
+    background: transparent;
+    color: var(--accent, #3b82f6);
+    border: 1px solid var(--accent, #3b82f6);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .att-open:hover {
+    background: var(--accent, #3b82f6);
+    color: white;
   }
 
   .pending-files {
@@ -488,5 +594,23 @@
 
   .attach-btn:hover {
     opacity: 1;
+  }
+
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9000;
+    cursor: zoom-out;
+  }
+
+  .lightbox-img {
+    max-width: 92vw;
+    max-height: 92vh;
+    border-radius: 8px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   }
 </style>
