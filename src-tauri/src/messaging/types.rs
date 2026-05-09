@@ -238,4 +238,111 @@ mod tests {
         assert_eq!(json["emoji"], "🔥");
         assert_eq!(json["remove"], false);
     }
+
+    #[test]
+    fn typing_event_serializes() {
+        let ev = TypingEvent {
+            chat_id: "chat-1".to_string(),
+            sender_id: "uuid-2".to_string(),
+            action: TypingAction::Started,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["chat_id"], "chat-1");
+        assert_eq!(json["sender_id"], "uuid-2");
+        assert_eq!(json["action"], "started");
+    }
+
+    #[test]
+    fn typing_action_serializes_lowercase() {
+        let started = serde_json::to_value(TypingAction::Started).unwrap();
+        let stopped = serde_json::to_value(TypingAction::Stopped).unwrap();
+        assert_eq!(started, "started");
+        assert_eq!(stopped, "stopped");
+    }
+
+    #[test]
+    fn edit_event_serializes() {
+        let ev = EditEvent {
+            chat_id: "chat-1".to_string(),
+            message_id: "1700000000000".to_string(),
+            new_text: "fixed typo".to_string(),
+            edited_at: 1700000000999,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["chat_id"], "chat-1");
+        assert_eq!(json["message_id"], "1700000000000");
+        assert_eq!(json["new_text"], "fixed typo");
+        assert_eq!(json["edited_at"], 1700000000999u64);
+    }
+
+    #[test]
+    fn delete_event_serializes() {
+        let ev = DeleteEvent {
+            chat_id: "chat-1".to_string(),
+            message_id: "1700000000000".to_string(),
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["chat_id"], "chat-1");
+        assert_eq!(json["message_id"], "1700000000000");
+        // Lean payload — no extra fields slip in.
+        assert_eq!(json.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn receipt_kind_serializes_lowercase() {
+        assert_eq!(serde_json::to_value(ReceiptKind::Delivered).unwrap(), "delivered");
+        assert_eq!(serde_json::to_value(ReceiptKind::Read).unwrap(), "read");
+        assert_eq!(serde_json::to_value(ReceiptKind::Viewed).unwrap(), "viewed");
+    }
+
+    #[test]
+    fn inbound_event_message_tag_is_kebab() {
+        let ev = InboundEvent::Message {
+            conversation_id: "chat-1".to_string(),
+            message: ChatMessage {
+                timestamp: 1,
+                sender_id: "u".to_string(),
+                sender_name: "U".to_string(),
+                body: Some("hi".to_string()),
+                attachments: vec![],
+                is_outgoing: false,
+            },
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "message");
+        assert_eq!(json["conversation_id"], "chat-1");
+    }
+
+    #[test]
+    fn inbound_event_typing_tag_is_kebab() {
+        let ev = InboundEvent::Typing(TypingEvent {
+            chat_id: "c".to_string(),
+            sender_id: "s".to_string(),
+            action: TypingAction::Stopped,
+        });
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "typing");
+    }
+
+    #[test]
+    fn inbound_event_edited_tag_is_kebab() {
+        let ev = InboundEvent::Edited(EditEvent {
+            chat_id: "c".to_string(),
+            message_id: "1".to_string(),
+            new_text: "x".to_string(),
+            edited_at: 2,
+        });
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "edited");
+    }
+
+    #[test]
+    fn inbound_event_deleted_tag_is_kebab() {
+        let ev = InboundEvent::Deleted(DeleteEvent {
+            chat_id: "c".to_string(),
+            message_id: "1".to_string(),
+        });
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "deleted");
+    }
 }
