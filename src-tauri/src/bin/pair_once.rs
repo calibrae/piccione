@@ -21,7 +21,7 @@
 //!   prove the registration row + identity keys are committed and visible to
 //!   the next process. Only then do we print PAIR_OK.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use presage::libsignal_service::configuration::SignalServers;
@@ -29,8 +29,8 @@ use presage::model::identity::OnNewIdentity;
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
 use qrcode::QrCode;
-use rand::RngCore;
 use signalui_lib::pair_flow::{run_pair, PairOutcome, QrResult};
+use signalui_lib::store::keychain::get_or_create_db_passphrase;
 
 const DEVICE_NAME: &str = "signalui-pair-once";
 const QR_PATH: &str = "/tmp/signalui-pair.png";
@@ -42,30 +42,6 @@ fn data_dir() -> PathBuf {
     PathBuf::from(home)
         .join("Library/Application Support")
         .join(APP_BUNDLE_ID)
-}
-
-/// Same convention as `signalui_lib::store::keychain::get_or_create_db_passphrase`:
-/// a 64-hex-char key in `<data_dir>/.db_key`, file mode 0600.
-fn get_or_create_db_passphrase(data_dir: &Path) -> std::io::Result<String> {
-    let key_file = data_dir.join(".db_key");
-    if key_file.exists() {
-        let key = std::fs::read_to_string(&key_file)?;
-        Ok(key.trim().to_string())
-    } else {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        let hex = hex::encode(bytes);
-        std::fs::write(&key_file, &hex)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &key_file,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
-        Ok(hex)
-    }
 }
 
 fn render_qr_png(url: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -107,6 +83,10 @@ fn main() {
         Ok(p) => p,
         Err(e) => fail(format!("failed to load passphrase: {}", e)),
     };
+    // Convert from Zeroizing<String> to plain String for cheap clones across
+    // the two LocalSet scopes below; the underlying secret only lives in
+    // memory while this short-lived process runs.
+    let passphrase: String = passphrase.as_str().to_string();
 
     let db_path = data.join("signalui.db");
     eprintln!("data_dir = {}", data.display());

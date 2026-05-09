@@ -6,12 +6,12 @@
 //! Stdout: `PAIRED` or `NOT_PAIRED`. Exits 0 either way unless the store
 //! itself is unreachable, in which case we print `ERROR …` and exit 1.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use presage::model::identity::OnNewIdentity;
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
-use rand::RngCore;
+use signalui_lib::store::keychain::get_or_create_db_passphrase;
 
 const APP_BUNDLE_ID: &str = "com.signalui.app";
 
@@ -20,28 +20,6 @@ fn data_dir() -> PathBuf {
     PathBuf::from(home)
         .join("Library/Application Support")
         .join(APP_BUNDLE_ID)
-}
-
-fn get_or_create_db_passphrase(data_dir: &Path) -> std::io::Result<String> {
-    let key_file = data_dir.join(".db_key");
-    if key_file.exists() {
-        let key = std::fs::read_to_string(&key_file)?;
-        Ok(key.trim().to_string())
-    } else {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        let hex = hex::encode(bytes);
-        std::fs::write(&key_file, &hex)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &key_file,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
-        Ok(hex)
-    }
 }
 
 fn fail(msg: impl AsRef<str>) -> ! {
@@ -90,7 +68,7 @@ fn main() {
             .run_until(async move {
                 let store = SqliteStore::open_with_passphrase(
                     &db_url,
-                    Some(&passphrase),
+                    Some(passphrase.as_str()),
                     OnNewIdentity::Trust,
                 )
                 .await

@@ -3,7 +3,7 @@ mod commands;
 mod messaging;
 pub mod pair_flow;
 mod provisioning;
-mod store;
+pub mod store;
 
 use app_state::AppState;
 use tauri::{Emitter, Manager};

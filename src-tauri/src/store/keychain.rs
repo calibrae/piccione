@@ -272,6 +272,44 @@ pub(crate) mod tests {
         assert_eq!(p1.as_str(), p2.as_str());
     }
 
+    /// The bins (`pair-once`, `is-paired`, `list-devices`) used to read
+    /// `<data_dir>/.db_key` directly. After the migration to keychain-only
+    /// resolution, the file was renamed to `.db_key.bak` — but the bins kept
+    /// the old direct-read code path, which would have either re-read a
+    /// **stale** `.db_key.bak` (if they were patched to look at .bak) or
+    /// generated a brand-new file out of phase with the keychain copy. Either
+    /// way the bin's passphrase diverged from the app's, and SQLCipher
+    /// panicked with "file is not a database".
+    ///
+    /// This test pins the contract the bins now rely on: when only
+    /// `.db_key.bak` is on disk (post-migration leftover) and the keychain is
+    /// empty, the lib helper must NOT read the .bak file. It must mint a
+    /// fresh passphrase and store it in the keychain, where the next call —
+    /// from any process — will find it.
+    #[test]
+    fn ignores_db_key_bak_post_migration_leftover() {
+        let dir = tempdir();
+        let kc = MemoryKeychain::default();
+        std::fs::write(dir.path().join(".db_key.bak"), "stale-passphrase\n").unwrap();
+
+        let p = get_or_create_db_passphrase_with(&kc, dir.path()).unwrap();
+
+        // Must not adopt the stale .bak content.
+        assert_ne!(p.as_str(), "stale-passphrase");
+        // Must look like a freshly minted 64-hex passphrase.
+        assert_eq!(p.len(), 64);
+        assert!(p.chars().all(|c| c.is_ascii_hexdigit()));
+        // And it must be in the keychain so subsequent processes see the same.
+        assert_eq!(
+            kc.get(SERVICE_NAME, DB_KEY_ACCOUNT).unwrap().as_deref(),
+            Some(p.as_bytes())
+        );
+        // .db_key.bak is left untouched (Cali's escape hatch).
+        assert!(dir.path().join(".db_key.bak").exists());
+        // No new .db_key was written.
+        assert!(!dir.path().join(".db_key").exists());
+    }
+
     #[test]
     fn delete_removes_existing_entry() {
         let kc = MemoryKeychain::default();
