@@ -32,6 +32,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 import ChatLayout from "../lib/components/ChatLayout.svelte";
+import { messagingStore } from "../lib/stores/messaging.svelte";
 
 // ----- Test fixtures -----
 
@@ -111,10 +112,12 @@ async function selectConversation() {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockInvoke.mockReset();
   mockListen.mockReset();
-  // listeners persist across tests (registered once at store init)
+  // The store no longer registers listeners at module load — App.svelte
+  // does that on mount. In ChatLayout-only tests we have to wire them up.
+  await messagingStore.initListeners();
 });
 
 afterEach(() => {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Conversation, ChatMessage } from "../types";
 import { toastStore } from "./toasts.svelte";
 
@@ -63,79 +63,102 @@ export function createMessagingStore() {
   // message_id -> tombstone marker
   let deletions = $state<Set<string>>(new Set());
 
-  // Listen for new messages
-  listen<{ conversation_id: string; message: ChatMessage }>(
-    "new-message",
-    (event) => {
-      const { conversation_id, message } = event.payload;
-      const existing = messages.get(conversation_id) ?? [];
-      messages.set(conversation_id, [...existing, message]);
-      messages = new Map(messages); // trigger reactivity
+  // Cleanup handles for IPC listeners. Populated by `initListeners()`,
+  // drained by the returned teardown to prevent pile-ups on HMR / app restart.
+  let unsubscribers: UnlistenFn[] = [];
+  let initialized = false;
+
+  /**
+   * Register Tauri event listeners. Idempotent: calling twice is a no-op.
+   * Returns a teardown function that removes every listener and resets the
+   * "initialized" flag so the store can be re-armed (test-only path).
+   */
+  async function initListeners(): Promise<() => Promise<void>> {
+    if (initialized) {
+      return teardown;
     }
-  );
+    initialized = true;
 
-  // Listen for conversation updates (new messages, contacts sync)
-  listen("conversations-updated", () => {
-    loadConversations();
-  });
+    const subs = await Promise.all([
+      listen<{ conversation_id: string; message: ChatMessage }>(
+        "new-message",
+        (event) => {
+          const { conversation_id, message } = event.payload;
+          const existing = messages.get(conversation_id) ?? [];
+          messages.set(conversation_id, [...existing, message]);
+          messages = new Map(messages);
+        }
+      ),
+      listen("conversations-updated", () => {
+        loadConversations();
+      }),
+      listen<ReceiptPayload>("read-receipt", (event) => {
+        const p = event.payload;
+        const perChat = receipts.get(p.chat_id) ?? new Map();
+        for (const mid of p.message_ids) {
+          perChat.set(mid, p);
+        }
+        receipts.set(p.chat_id, perChat);
+        receipts = new Map(receipts);
+      }),
+      listen<TypingPayload>("typing-indicator", (event) => {
+        const p = event.payload;
+        const perChat = typing.get(p.chat_id) ?? new Map();
+        if (p.action === "stopped") {
+          perChat.delete(p.sender_id);
+        } else {
+          perChat.set(p.sender_id, p.action);
+        }
+        if (perChat.size === 0) {
+          typing.delete(p.chat_id);
+        } else {
+          typing.set(p.chat_id, perChat);
+        }
+        typing = new Map(typing);
+      }),
+      listen<ReactionPayload>("reaction", (event) => {
+        const p = event.payload;
+        const perChat = reactions.get(p.chat_id) ?? new Map();
+        const perMsg = perChat.get(p.target_message_id) ?? new Map();
+        if (p.remove) {
+          perMsg.delete(p.sender_id);
+        } else {
+          perMsg.set(p.sender_id, p.emoji);
+        }
+        if (perMsg.size === 0) {
+          perChat.delete(p.target_message_id);
+        } else {
+          perChat.set(p.target_message_id, perMsg);
+        }
+        reactions.set(p.chat_id, perChat);
+        reactions = new Map(reactions);
+      }),
+      listen<EditPayload>("message-edited", (event) => {
+        const p = event.payload;
+        edits.set(p.message_id, p);
+        edits = new Map(edits);
+      }),
+      listen<DeletePayload>("message-deleted", (event) => {
+        const p = event.payload;
+        deletions.add(p.message_id);
+        deletions = new Set(deletions);
+      }),
+    ]);
+    unsubscribers = subs;
+    return teardown;
+  }
 
-  // ---- Modifier listeners ----
-
-  listen<ReceiptPayload>("read-receipt", (event) => {
-    const p = event.payload;
-    const perChat = receipts.get(p.chat_id) ?? new Map();
-    for (const mid of p.message_ids) {
-      perChat.set(mid, p);
+  async function teardown(): Promise<void> {
+    for (const fn of unsubscribers) {
+      try {
+        fn();
+      } catch (e) {
+        console.error("listener teardown failed:", e);
+      }
     }
-    receipts.set(p.chat_id, perChat);
-    receipts = new Map(receipts);
-  });
-
-  listen<TypingPayload>("typing-indicator", (event) => {
-    const p = event.payload;
-    const perChat = typing.get(p.chat_id) ?? new Map();
-    if (p.action === "stopped") {
-      perChat.delete(p.sender_id);
-    } else {
-      perChat.set(p.sender_id, p.action);
-    }
-    if (perChat.size === 0) {
-      typing.delete(p.chat_id);
-    } else {
-      typing.set(p.chat_id, perChat);
-    }
-    typing = new Map(typing);
-  });
-
-  listen<ReactionPayload>("reaction", (event) => {
-    const p = event.payload;
-    const perChat = reactions.get(p.chat_id) ?? new Map();
-    const perMsg = perChat.get(p.target_message_id) ?? new Map();
-    if (p.remove) {
-      perMsg.delete(p.sender_id);
-    } else {
-      perMsg.set(p.sender_id, p.emoji);
-    }
-    if (perMsg.size === 0) {
-      perChat.delete(p.target_message_id);
-    } else {
-      perChat.set(p.target_message_id, perMsg);
-    }
-    reactions.set(p.chat_id, perChat);
-    reactions = new Map(reactions);
-  });
-
-  listen<EditPayload>("message-edited", (event) => {
-    const p = event.payload;
-    edits.set(p.message_id, p);
-    edits = new Map(edits);
-  });
-
-  listen<DeletePayload>("message-deleted", (event) => {
-    const p = event.payload;
-    deletions.add(p.message_id);
-    deletions = new Set(deletions);
-  });
+    unsubscribers = [];
+    initialized = false;
+  }
 
   async function loadConversations() {
     try {
@@ -206,6 +229,18 @@ export function createMessagingStore() {
     }
   }
 
+  async function sendToRecipient(recipientId: string, body: string) {
+    try {
+      await invoke("send_to_recipient", { recipientId, body });
+    } catch (e) {
+      console.error("Failed to send to recipient:", e);
+      toastStore.error("Échec de l'envoi", () =>
+        sendToRecipient(recipientId, body)
+      );
+      throw e;
+    }
+  }
+
   async function loadSelfId() {
     try {
       selfId = await invoke<string | null>("get_self_id");
@@ -245,13 +280,19 @@ export function createMessagingStore() {
     get deletions() {
       return deletions;
     },
+    /** Test-only: introspection of the listener registry. */
+    get _listenerCount() {
+      return unsubscribers.length;
+    },
     getMessages(conversationId: string): ChatMessage[] {
       return messages.get(conversationId) ?? [];
     },
+    initListeners,
     loadConversations,
     loadMessages,
     sendMessage,
     sendMessageWithAttachments,
+    sendToRecipient,
     loadSelfId,
   };
 }

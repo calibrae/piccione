@@ -16,7 +16,7 @@ describe("App", () => {
   it("renders the provisioning screen when not linked", async () => {
     render(App);
     // Wait for loading to finish
-    const linkButton = await screen.findByText("Link Device", {}, { timeout: 2000 });
+    const linkButton = await screen.findByText("Lier l'appareil", {}, { timeout: 2000 });
     expect(linkButton).toBeInTheDocument();
   });
 });

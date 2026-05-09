@@ -21,22 +21,35 @@ describe("LinkDevice", () => {
     vi.clearAllMocks();
   });
 
-  it("renders welcome screen initially", () => {
+  it("renders the welcome screen with French copy", () => {
     render(LinkDevice);
     expect(screen.getByText("SignalUI")).toBeInTheDocument();
-    expect(screen.getByText("Link Device")).toBeInTheDocument();
+    // Subtitle and CTA are now French.
+    expect(screen.getByText("Un client Signal léger pour le bureau")).toBeInTheDocument();
+    expect(screen.getByText("Lier l'appareil")).toBeInTheDocument();
   });
 
-  it("has a link device button", () => {
+  it("does not leak any English UI strings", () => {
     render(LinkDevice);
-    const btn = screen.getByText("Link Device");
-    expect(btn).toBeInTheDocument();
+    // The previous version had "Link Device", "A lightweight Signal desktop client",
+    // "Cancel", "Try Again", etc. Make sure none of them slipped back in.
+    const banned = [
+      "Link Device",
+      "A lightweight Signal desktop client",
+      "Connecting to Signal",
+      "Linking device",
+      "Try Again",
+      "Cancel",
+    ];
+    for (const phrase of banned) {
+      expect(screen.queryByText(phrase)).toBeNull();
+    }
+  });
+
+  it("calls start_provisioning with the localised CTA", async () => {
+    render(LinkDevice);
+    const btn = screen.getByText("Lier l'appareil");
     expect(btn.tagName).toBe("BUTTON");
-  });
-
-  it("calls start_provisioning when link button clicked", async () => {
-    render(LinkDevice);
-    const btn = screen.getByText("Link Device");
     await fireEvent.click(btn);
     expect(mockInvoke).toHaveBeenCalledWith("start_provisioning", {
       deviceName: "SignalUI Desktop",

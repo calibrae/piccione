@@ -26,54 +26,54 @@
     {#if provisioningStore.state.type === "Idle" && !started}
       <div class="welcome">
         <h1>SignalUI</h1>
-        <p class="subtitle">A lightweight Signal desktop client</p>
+        <p class="subtitle">Un client Signal léger pour le bureau</p>
         <button class="primary-btn" onclick={handleLink}>
-          Link Device
+          Lier l'appareil
         </button>
       </div>
 
     {:else if provisioningStore.state.type === "Connecting"}
       <div class="status">
         <div class="spinner"></div>
-        <p>Connecting to Signal...</p>
+        <p>Connexion à Signal…</p>
       </div>
 
     {:else if provisioningStore.state.type === "WaitingForScan"}
       <div class="scan">
-        <h2>Scan QR Code</h2>
+        <h2>Scannez le QR code</h2>
         <p class="instruction">
-          Open Signal on your phone, go to Settings &rarr; Linked Devices &rarr; Link New Device
+          Ouvrez Signal sur votre téléphone, puis Réglages &rarr; Appareils liés &rarr; Lier un nouvel appareil
         </p>
         <QrCode svg={provisioningStore.state.qr_code_svg} />
         <button class="secondary-btn" onclick={handleCancel}>
-          Cancel
+          Annuler
         </button>
       </div>
 
     {:else if provisioningStore.state.type === "Provisioning"}
       <div class="status">
         <div class="spinner"></div>
-        <p>Linking device...</p>
+        <p>Liaison de l'appareil…</p>
       </div>
 
     {:else if provisioningStore.state.type === "Registered"}
       <div class="status success">
         <div class="checkmark">&#10003;</div>
-        <p>Device linked successfully!</p>
+        <p>Appareil lié avec succès&nbsp;!</p>
       </div>
 
     {:else if provisioningStore.state.type === "Error"}
       <div class="status error">
         <p class="error-msg">{provisioningStore.state.message}</p>
         <button class="primary-btn" onclick={handleRetry}>
-          Try Again
+          Réessayer
         </button>
       </div>
 
     {:else}
       <div class="status">
         <div class="spinner"></div>
-        <p>Starting...</p>
+        <p>Démarrage…</p>
       </div>
     {/if}
   </div>
