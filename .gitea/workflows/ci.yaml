@@ -1,0 +1,40 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-arm64
+    timeout-minutes: 25
+    steps:
+      - name: Build & test
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          export GIT_TERMINAL_PROMPT=0
+          export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LANGUAGE=en_US.UTF-8
+
+          # Manual clone (act-runner-rs is host-mode, no actions/checkout)
+          rm -rf src
+          git -c credential.helper= clone --depth 1 --branch "${GITHUB_REF##*/}" \
+            "https://x-access-token:${GITEA_TOKEN}@git.calii.net/cali/signalui.git" src
+          cd src
+          [ -n "${GITHUB_SHA:-}" ] && git checkout "$GITHUB_SHA" || true
+
+          # Frontend
+          npm ci
+          npm run build
+          npm test
+
+          # Rust backend
+          cd src-tauri
+          cargo check --offline || cargo check
+          cargo test --lib --release
+
+          # ⚠ DO NOT run `npm run tauri dev` — needs DISPLAY, will hang the runner
+          # TODO: e2e once Tauri webdriver is wired
