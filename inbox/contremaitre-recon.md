@@ -74,3 +74,19 @@ ssh cali@mini "cd ~/Developer/perso/signalui/src-tauri && ./target/release/pair-
 Or call infrakid back — the helper is idempotent, and the Telegram pipe still has the bot token in vault.
 
 Pushed: commit `feat: pair-once headless pairing helper` on gitea + origin.
+
+---
+
+## Update — 2026-05-09 10:23: pair-once SUCCESS
+
+Re-ran the helper. Cali was at the keyboard.
+
+- QR PNG `/tmp/signalui-pair.png` (6.0 KB) generated 10:22:50, forwarded via hermytt_bot (msg_id 7590).
+- Cali scanned. presage logged: `successfully registered device aci=b00400e5-ae19-4529-a758-7995c6e221b4 pni=48c35e3a-a8e1-4657-9347-5dd8304f05a3` at 10:23:25 — total link latency ~35 s.
+- Binary printed `PAIR_OK` and exited 0.
+- Store updated: `signalui.db-wal` mtime = 10:23:25, size 64.5 MB (was 63.5 MB pre-run). `signalui.db` 37.8 MB unchanged (registration is in the WAL until next checkpoint — that's fine, presage reads through the WAL).
+- `.db_key` untouched (64 B, mode 0600).
+
+Next time Cali runs `npm run tauri dev`, the app should hit `Manager::load_registered`'s success path on startup → skip LinkDevice, drop straight into ChatLayout, contacts sync kicks in.
+
+🎉
