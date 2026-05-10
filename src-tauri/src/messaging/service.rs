@@ -165,9 +165,14 @@ impl MessagingService {
             .join("attachments");
         let _ = std::fs::create_dir_all(&attachments_dir);
 
-        // Request contacts sync
-        if let Err(e) = mgr_send.request_contacts().await {
-            warn!("failed to request contacts: {}", e);
+        // DO NOT call mgr_send.request_contacts(). The legacy sync arrives
+        // from modern primaries as an empty stub, and presage's Received::Contacts
+        // handler unconditionally calls `store.clear_contacts()` BEFORE iterating,
+        // which would wipe everything Storage Service just populated. Storage
+        // Service is now the only contact-sync path we use.
+        match mgr_send.sync_storage().await {
+            Ok(n) => info!("storage service sync: saved {} contacts", n),
+            Err(e) => warn!("storage service sync failed: {}", e),
         }
 
         // Spawn receive loop locally
@@ -267,9 +272,11 @@ impl MessagingService {
                                 .join("attachments");
                             let _ = std::fs::create_dir_all(&att_dir);
 
-                            // Request contacts sync
-                            if let Err(e) = mgr_send.request_contacts().await {
-                                warn!("failed to request contacts: {}", e);
+                            // Storage Service only. See start_after_provisioning_local
+                            // for why we no longer call request_contacts().
+                            match mgr_send.sync_storage().await {
+                                Ok(n) => info!("storage service sync: saved {} contacts", n),
+                                Err(e) => warn!("storage service sync failed: {}", e),
                             }
 
                             // Spawn receive loop as a local task
