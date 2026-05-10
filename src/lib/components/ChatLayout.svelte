@@ -9,6 +9,8 @@
   let showNewMessage = $state(false);
   let newRecipient = $state("");
   let newMessageText = $state("");
+  let contactSearch = $state("");
+  let showUuidInput = $state(false);
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
 
@@ -129,6 +131,36 @@
     return date.toLocaleDateString([], { month: "short", day: "numeric" });
   }
 
+  // Contacts (1:1 conversations) for the new-message picker. Filter by search,
+  // sort alphabetically by name. We pull from the same conversations array so we
+  // automatically pick up newly-synced contacts without an extra backend call.
+  let pickerContacts = $derived(
+    messagingStore.conversations
+      .filter((c) => !c.is_group)
+      .filter((c) => {
+        const q = contactSearch.trim().toLowerCase();
+        if (!q) return true;
+        return c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
+      })
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+  );
+
+  let pickedContact = $derived(
+    messagingStore.conversations.find((c) => c.id === newRecipient && !c.is_group) ?? null
+  );
+
+  function pickContact(id: string) {
+    newRecipient = id;
+    contactSearch = "";
+    showUuidInput = false;
+  }
+
+  function clearPickedContact() {
+    newRecipient = "";
+    showUuidInput = false;
+  }
+
   let activeMessages = $derived(
     messagingStore.activeConversationId
       ? messagingStore.getMessages(messagingStore.activeConversationId)
@@ -218,17 +250,59 @@
       </div>
       <div class="new-message-form">
         <div class="form-field">
-          <label for="recipient">UUID du destinataire</label>
-          <input
-            id="recipient"
-            type="text"
-            placeholder="UUID du contact (depuis Signal)"
-            bind:value={newRecipient}
-          />
-          {#if messagingStore.selfId}
-            <button class="self-btn" onclick={() => (newRecipient = messagingStore.selfId ?? "")}>
-              Note à moi-même
+          <label for="contact-search">Destinataire</label>
+          {#if pickedContact}
+            <div class="picked-contact">
+              <div class="avatar small">{pickedContact.name[0]?.toUpperCase() ?? "?"}</div>
+              <div class="picked-info">
+                <div class="picked-name">{pickedContact.name}</div>
+                <div class="picked-uuid">{pickedContact.id}</div>
+              </div>
+              <button class="ghost-btn" onclick={clearPickedContact} title="Changer">×</button>
+            </div>
+          {:else if showUuidInput}
+            <input
+              id="recipient"
+              type="text"
+              placeholder="UUID du contact (depuis Signal)"
+              bind:value={newRecipient}
+            />
+            <button class="link-btn" onclick={() => (showUuidInput = false)}>
+              ← Choisir dans la liste
             </button>
+          {:else}
+            <input
+              id="contact-search"
+              type="text"
+              placeholder="Rechercher un contact…"
+              bind:value={contactSearch}
+              autocomplete="off"
+            />
+            <div class="contact-picker">
+              {#if pickerContacts.length === 0}
+                <div class="contact-empty">Aucun contact — vérifiez que la sync est terminée.</div>
+              {:else}
+                {#each pickerContacts as c}
+                  <button class="contact-item" onclick={() => pickContact(c.id)}>
+                    <div class="avatar small">{c.name[0]?.toUpperCase() ?? "?"}</div>
+                    <div class="contact-meta">
+                      <div class="contact-name">{c.name}</div>
+                      <div class="contact-uuid">{c.id}</div>
+                    </div>
+                  </button>
+                {/each}
+              {/if}
+            </div>
+            <div class="picker-actions">
+              {#if messagingStore.selfId}
+                <button class="self-btn" onclick={() => pickContact(messagingStore.selfId ?? "")}>
+                  Note à moi-même
+                </button>
+              {/if}
+              <button class="link-btn" onclick={() => (showUuidInput = true)}>
+                Coller un UUID…
+              </button>
+            </div>
           {/if}
         </div>
         <div class="form-field">
@@ -419,6 +493,140 @@
   .self-btn:hover {
     background: var(--accent, #3b82f6);
     color: white;
+  }
+
+  .link-btn {
+    align-self: flex-start;
+    background: transparent;
+    color: var(--accent, #3b82f6);
+    border: none;
+    padding: 4px 0;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .picker-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-top: 8px;
+  }
+
+  .contact-picker {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border, #27272a);
+    border-radius: 8px;
+    background: var(--bg-secondary, #16213e);
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .contact-empty {
+    padding: 16px;
+    color: var(--text-secondary, #a1a1aa);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+
+  .contact-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .contact-item:last-child {
+    border-bottom: none;
+  }
+
+  .contact-item:hover {
+    background: rgba(255,255,255,0.05);
+  }
+
+  .contact-meta {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .contact-name {
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .contact-uuid {
+    color: var(--text-secondary, #a1a1aa);
+    font-size: 0.7rem;
+    font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .picked-contact {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-secondary, #16213e);
+    border: 1px solid var(--accent, #3b82f6);
+    border-radius: 8px;
+  }
+
+  .picked-info {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .picked-name {
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+
+  .picked-uuid {
+    color: var(--text-secondary, #a1a1aa);
+    font-size: 0.7rem;
+    font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ghost-btn {
+    background: transparent;
+    color: var(--text-secondary, #a1a1aa);
+    border: none;
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+
+  .ghost-btn:hover {
+    color: var(--text-primary, #e4e4e7);
+  }
+
+  .avatar.small {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
   }
 
   .form-actions {

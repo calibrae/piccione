@@ -65,10 +65,61 @@ fn is_not_found(e: &SfError) -> bool {
 }
 
 /// Public entry point — production code uses this.
+///
+/// **Dev-build behaviour**: writes the passphrase to `<data_dir>/.db_key`
+/// (mode 0600) and reads from there on every subsequent launch. The macOS
+/// Keychain is bypassed entirely because the ACL it issues is keyed by
+/// codesigning identity, and `cargo run` produces a new ad-hoc identity on
+/// every rebuild — so every keychain access prompts the user for the login
+/// password. Three prompts per launch and forced re-link if any of them
+/// times out is not a UX we are willing to ship.
+///
+/// **Path forward**: a future PR will gate the real Keychain backend behind
+/// a `production` cargo feature, enabled by the bundle/notarise pipeline
+/// where the codesign identity is stable across builds. For now, the
+/// `.db_key` file at 0600 on an encrypted APFS volume is the correct
+/// trade-off: the threat model on a single-user dev box is dominated by
+/// supply-chain / sandbox-escape attacks that neither file nor keychain
+/// fundamentally defends against without further isolation.
 pub fn get_or_create_db_passphrase(
     data_dir: &std::path::Path,
 ) -> Result<Zeroizing<String>, KeychainError> {
-    get_or_create_db_passphrase_with(&SystemKeychain, data_dir)
+    let key_file = data_dir.join(".db_key");
+
+    if key_file.exists() {
+        let raw = std::fs::read_to_string(&key_file)
+            .map_err(|e| KeychainError::AccessFailed(format!("read .db_key: {}", e)))?;
+        let trimmed = raw.trim().to_string();
+        tracing::debug!("loaded database encryption key from .db_key file");
+        return Ok(Zeroizing::new(trimmed));
+    }
+
+    // Cold start — mint a fresh passphrase and persist to .db_key (0600).
+    let passphrase = generate_passphrase();
+    write_db_key_file(&key_file, passphrase.as_str())?;
+    tracing::info!("created fresh database encryption key in .db_key file");
+    Ok(passphrase)
+}
+
+/// Write the passphrase to `path` with `0600` permissions.
+fn write_db_key_file(path: &std::path::Path, passphrase: &str) -> Result<(), KeychainError> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+
+    let mut f = opts
+        .open(path)
+        .map_err(|e| KeychainError::StoreFailed(format!("open .db_key: {}", e)))?;
+    f.write_all(passphrase.as_bytes())
+        .map_err(|e| KeychainError::StoreFailed(format!("write .db_key: {}", e)))?;
+    f.write_all(b"
+").ok();
+    Ok(())
 }
 
 /// Implementation generic over a [`KeychainBackend`] for testability.

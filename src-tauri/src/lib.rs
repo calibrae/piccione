@@ -102,6 +102,9 @@ pub fn run() {
                             let passphrase = state.db_passphrase_str();
                             let on_event = make_on_event(app_handle.clone());
                             state.messaging.try_load_and_start(passphrase, on_event).await;
+                            // Unblock get_link_status waiters — startup pass is done
+                            // (regardless of whether a registered manager was found).
+                            state.startup_complete.notify_waiters();
                         }).await;
                     });
                 })

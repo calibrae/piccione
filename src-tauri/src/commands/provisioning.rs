@@ -76,6 +76,19 @@ pub async fn cancel_provisioning(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_link_status(app: AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
+
+    // Fast-path: already loaded.
+    if state.messaging.self_id().await.is_some() {
+        return Ok(true);
+    }
+
+    // Otherwise wait up to 5s for the startup thread to finish its
+    // try_load_and_start pass. This prevents the cold-boot race where the
+    // WebView calls get_link_status before the registered manager has
+    // populated self_aci, and falsely concludes the device is unpaired.
+    let notify = state.startup_complete.clone();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified()).await;
+
     Ok(state.messaging.self_id().await.is_some())
 }
 
