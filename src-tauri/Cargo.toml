@@ -12,16 +12,8 @@ name = "signalui"
 path = "src/main.rs"
 
 [[bin]]
-name = "pair-once"
-path = "src/bin/pair_once.rs"
-
-[[bin]]
-name = "is-paired"
-path = "src/bin/is_paired.rs"
-
-[[bin]]
-name = "list-devices"
-path = "src/bin/list_devices.rs"
+name = "signalui-cli"
+path = "src/bin/signalui_cli.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -50,6 +42,7 @@ hex = "0.4"
 uuid = "1"
 mime_guess = "2"
 prost = "0.13"
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 mockall = "0.13"

@@ -151,7 +151,14 @@ pub fn delete_db_passphrase_with<K: KeychainBackend>(keychain: &K) -> Result<(),
 pub fn resolve_db_passphrase_for_cli(
     data_dir: &std::path::Path,
 ) -> Result<Zeroizing<String>, KeychainError> {
-    resolve_db_passphrase_for_cli_with_timeout(data_dir, std::time::Duration::from_secs(3))
+    // 30s, not 3s. First-run UX: a fresh signed-bin identity triggers a
+    // macOS security-agent ACL prompt ("signalui-cli wants to access
+    // signalui-db-encryption-key"). Cali needs time to find the prompt,
+    // read it, and click "Always Allow" before we silently fall through
+    // to the .db_key.bak escape hatch. The fallback still kicks in only
+    // after a real timeout — once the ACL is granted, subsequent
+    // resolutions return in milliseconds.
+    resolve_db_passphrase_for_cli_with_timeout(data_dir, std::time::Duration::from_secs(30))
 }
 
 /// Backend-generic + tunable-timeout variant for tests.
