@@ -1,3 +1,7 @@
+// mimalloc as the global allocator — see Cargo.toml for why.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app_state;
 mod commands;
 mod messaging;

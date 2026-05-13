@@ -45,6 +45,12 @@ mime_guess = "2"
 prost = "0.13"
 clap = { version = "4", features = ["derive"] }
 
+# mimalloc as global allocator. macOS default malloc holds onto freed pages
+# very aggressively, inflating RSS after one-shot allocations like the
+# Storage-Service contact sync. mimalloc with the default "purge after idle"
+# behaviour returns pages to the OS, cutting steady-state RSS by ~30-50%.
+mimalloc = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 mockall = "0.13"
 
@@ -63,3 +69,15 @@ presage-store-sqlite = { path = "../../presage/presage-store-sqlite" }
 
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
 libsignal-service = { path = "../../libsignal-service-rs" }
+
+[profile.release]
+# Tighter binary + slightly lower RSS for the consumer-shipped build.
+# lto=fat enables full link-time optimisation across crate boundaries
+# (saves ~10-15%% binary size, helps inlining hot loops).
+# codegen-units=1 produces a single compilation unit, lets the optimiser
+# see across the whole crate — smaller binary, longer build (~2x).
+# strip=symbols drops debuginfo from the binary itself; backtraces still
+# work via dSYM if we want.
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
