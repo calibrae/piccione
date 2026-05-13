@@ -104,6 +104,19 @@ jobs:
 
       # --- Linux system deps --------------------------------------------------
 
+      - name: install openssl (windows)
+        if: matrix.platform.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          # libsqlite3-sys (whisperfish/rusqlite fork) is built with
+          # SQLCipher, which links against OpenSSL. The choco-installed
+          # Win64 build lives at C:\Program Files\OpenSSL-Win64; point
+          # cargo at it via OPENSSL_DIR + OPENSSL_STATIC=1 so the result
+          # has no runtime DLL dep.
+          choco install openssl -y --no-progress
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+
       - name: install linux build deps
         if: matrix.platform.runner == 'ubuntu-24.04'
         run: |
