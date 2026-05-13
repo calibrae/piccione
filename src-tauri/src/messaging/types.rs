@@ -22,6 +22,21 @@ pub struct AttachmentInfo {
     pub pointer_data: Option<Vec<u8>>,
 }
 
+/// Single attachment ready for the media-browser grid.
+///
+/// Distinct from [`ChatMessage`] because the media browser is a flat list
+/// across the whole thread — it doesn't carry the message body. Each
+/// [`MediaItem`] is one attachment; a chat message with three images
+/// produces three media items.
+#[derive(Debug, Clone, Serialize)]
+pub struct MediaItem {
+    pub timestamp: u64,
+    pub sender_id: String,
+    pub sender_name: String,
+    pub is_outgoing: bool,
+    pub attachment: AttachmentInfo,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,

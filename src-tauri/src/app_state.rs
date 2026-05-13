@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 use zeroize::Zeroizing;
 
 use crate::messaging::service::MessagingService;
 use crate::provisioning::manager::ProvisioningManager;
+use crate::settings::Settings;
 use crate::store::keychain;
 
 /// Shared application state managed by Tauri.
@@ -13,6 +14,10 @@ pub struct AppState {
     pub provisioning: ProvisioningManager,
     pub messaging: MessagingService,
     pub db_passphrase: Zeroizing<String>,
+    /// User-facing app settings (read receipts, theme, …). Loaded from
+    /// `<data_dir>/settings.json` at startup; mutated via the
+    /// `set_settings` Tauri command which also writes back to disk.
+    pub settings: Arc<Mutex<Settings>>,
     /// Notified once the startup thread has finished its `try_load_and_start`
     /// pass — success or failure. Front-end commands like `get_link_status`
     /// await this (with a timeout) to avoid a race where the WebView fires
@@ -36,11 +41,21 @@ impl AppState {
             }
         };
 
+        let settings = Settings::load(&data_dir);
+
+        let messaging = MessagingService::new(db_path.clone());
+        // Sync the persisted read-receipts toggle into the runtime atomic
+        // so the receive loop sees the right value before any envelopes arrive.
+        messaging
+            .read_receipts_enabled
+            .store(settings.read_receipts, std::sync::atomic::Ordering::Relaxed);
+
         Self {
-            provisioning: ProvisioningManager::new(db_path.clone()),
-            messaging: MessagingService::new(db_path),
+            provisioning: ProvisioningManager::new(db_path),
+            messaging,
             db_passphrase,
             startup_complete: Arc::new(Notify::new()),
+            settings: Arc::new(Mutex::new(settings)),
         }
     }
 

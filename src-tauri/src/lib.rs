@@ -3,6 +3,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app_state;
+mod settings;
 mod commands;
 mod messaging;
 pub mod pair_flow;
@@ -128,7 +129,10 @@ pub fn run() {
             commands::messaging::send_to_recipient,
             commands::messaging::send_message_with_attachments,
             commands::messaging::mark_conversation_read,
+            commands::messaging::get_conversation_media,
             commands::account::sign_out,
+            commands::settings::get_settings,
+            commands::settings::set_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

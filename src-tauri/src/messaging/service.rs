@@ -57,6 +57,11 @@ pub struct MessagingService {
     db_passphrase: Arc<Mutex<Option<String>>>,
     self_aci: Arc<Mutex<Option<String>>>,
     send_tx: Arc<Mutex<Option<mpsc::UnboundedSender<SendRequest>>>>,
+    /// Whether outbound receipts (DELIVERY + READ) are emitted. Gated by
+    /// the user's `read_receipts` setting; the receive loop and the
+    /// `mark_conversation_read` command both consult this before
+    /// enqueueing a Receipt SendRequest.
+    pub read_receipts_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MessagingService {
@@ -67,6 +72,10 @@ impl MessagingService {
             db_passphrase: Arc::new(Mutex::new(None)),
             self_aci: Arc::new(Mutex::new(None)),
             send_tx: Arc::new(Mutex::new(None)),
+            // Default to "on" — the user can disable via Settings.
+            // AppState::new overwrites this immediately after construction
+            // with the value persisted in settings.json.
+            read_receipts_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -172,6 +181,7 @@ impl MessagingService {
         let mgr_download = mgr.clone();
         let mut mgr_recv = mgr;
         let send_tx_recv = send_tx.clone();
+        let receipts_enabled_recv = self.read_receipts_enabled.clone();
         let attachments_dir = self
             .db_path
             .parent()
@@ -213,6 +223,7 @@ impl MessagingService {
                                         &content,
                                         &self_aci_val,
                                         &send_tx_recv,
+                                        &receipts_enabled_recv,
                                     );
                                     process_content(
                                         &content,
@@ -258,6 +269,7 @@ impl MessagingService {
         let self_aci = self.self_aci.clone();
         let on_event = Arc::new(on_event);
         let db_path = self.db_path.clone();
+        let receipts_enabled = self.read_receipts_enabled.clone();
 
         std::thread::Builder::new()
             .name("signalui-messaging".to_string())
@@ -293,6 +305,7 @@ impl MessagingService {
                             let self_aci_recv = self_aci.clone();
                             let on_event_recv = on_event.clone();
                             let send_tx_recv = send_tx.clone();
+                            let receipts_enabled_recv = receipts_enabled.clone();
                             tokio::task::spawn_local(async move {
                                 loop {
                                     info!("starting receive loop");
@@ -314,6 +327,7 @@ impl MessagingService {
                                                             &content,
                                                             &self_aci_val,
                                                             &send_tx_recv,
+                                                            &receipts_enabled_recv,
                                                         );
                                                         process_content(
                                                             &content,
@@ -491,6 +505,48 @@ impl MessagingService {
         Ok(conversations)
     }
 
+    /// Load every attachment ever sent or received in a conversation, sorted
+    /// newest-first. Used by the media-browser modal.
+    ///
+    /// Walks `store.messages(thread, ..)` (same iterator as [`get_messages`])
+    /// but flattens each message's `attachments` into the result. Outgoing
+    /// messages (sync envelopes) and incoming messages are both included.
+    /// Messages with no attachments are skipped.
+    pub async fn get_conversation_media(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<crate::messaging::types::MediaItem>, String> {
+        let store = self.fresh_read_store().await?;
+        let thread = parse_thread(conversation_id)?;
+        let self_aci = self.self_aci.lock().await.clone();
+
+        let messages_iter = store
+            .messages(&thread, ..)
+            .await
+            .map_err(|e| format!("failed to load messages: {}", e))?;
+
+        let mut items: Vec<crate::messaging::types::MediaItem> = Vec::new();
+        for msg_result in messages_iter {
+            let Ok(content) = msg_result else { continue };
+            let Some(mut chat_msg) = content_to_chat_message(&content, &self_aci) else { continue };
+            if chat_msg.attachments.is_empty() {
+                continue;
+            }
+            enrich_sender_name(&mut chat_msg, &store, &self_aci).await;
+            for att in chat_msg.attachments.drain(..) {
+                items.push(crate::messaging::types::MediaItem {
+                    timestamp: chat_msg.timestamp,
+                    sender_id: chat_msg.sender_id.clone(),
+                    sender_name: chat_msg.sender_name.clone(),
+                    is_outgoing: chat_msg.is_outgoing,
+                    attachment: att,
+                });
+            }
+        }
+        items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(items)
+    }
+
     /// Load messages from the store (opens fresh connection).
     pub async fn get_messages(&self, conversation_id: &str) -> Result<Vec<ChatMessage>, String> {
         let store = self.fresh_read_store().await?;
@@ -554,8 +610,13 @@ fn auto_delivery_receipt(
     content: &Content,
     self_aci: &Option<String>,
     send_tx: &mpsc::UnboundedSender<SendRequest>,
+    enabled: &std::sync::atomic::AtomicBool,
 ) {
     use presage::libsignal_service::content::ContentBody;
+
+    if !enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
 
     // Only acknowledge real DataMessages. Sync / typing / receipt envelopes
     // don't need delivery receipts and would create a feedback loop with

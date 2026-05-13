@@ -100,6 +100,18 @@ pub async fn mark_conversation_read(
     use uuid::Uuid;
     let state = app.state::<crate::AppState>();
 
+    // Settings gate: if the user has disabled read receipts entirely,
+    // silently no-op. The mark-on-open behaviour stays for our own UI
+    // (incoming-message timestamps are still tracked locally), but no
+    // outbound envelope is sent.
+    if !state
+        .messaging
+        .read_receipts_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Ok(());
+    }
+
     // Resolve recipient UUID. Conversations come in as ACI strings for 1:1.
     // Group threads have a hex-encoded master key — receipts there work
     // differently (per-member) and aren't handled by this command yet.
@@ -121,5 +133,20 @@ pub async fn mark_conversation_read(
             crate::messaging::types::ReceiptKind::Read,
             timestamps,
         )
+        .await
+}
+
+/// Return every attachment exchanged in a conversation, newest first.
+#[tauri::command]
+pub async fn get_conversation_media(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<Vec<crate::messaging::types::MediaItem>, String> {
+    use tracing::info;
+    info!("get_conversation_media called for {}", conversation_id);
+    let state = app.state::<crate::AppState>();
+    state
+        .messaging
+        .get_conversation_media(&conversation_id)
         .await
 }

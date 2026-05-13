@@ -3,10 +3,15 @@
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { messagingStore } from "../stores/messaging.svelte";
+  import { settingsStore } from "../stores/settings.svelte";
+  import Settings from "./Settings.svelte";
+  import MediaBrowser from "./MediaBrowser.svelte";
 
   let inputText = $state("");
   let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
   let showNewMessage = $state(false);
+  let showSettings = $state(false);
+  let showMedia = $state(false);
   let newRecipient = $state("");
   let newMessageText = $state("");
   let contactSearch = $state("");
@@ -15,6 +20,7 @@
   let lightboxSrc = $state<string | null>(null);
 
   onMount(async () => {
+    await settingsStore.load();
     await messagingStore.loadSelfId();
     await messagingStore.loadConversations();
     // No 5s poll: the backend emits `conversations-updated` whenever
@@ -239,9 +245,19 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <h1>SignalUI</h1>
-      <button class="new-msg-btn" onclick={() => (showNewMessage = true)} title="Nouveau message">
-        +
-      </button>
+      <div class="header-actions">
+        <button
+          class="icon-btn"
+          onclick={() => (showSettings = true)}
+          title="Paramètres"
+          aria-label="Paramètres"
+        >
+          ⚙
+        </button>
+        <button class="new-msg-btn" onclick={() => (showNewMessage = true)} title="Nouveau message">
+          +
+        </button>
+      </div>
     </div>
     <div class="conversations">
       {#if messagingStore.conversations.length === 0}
@@ -354,6 +370,14 @@
     {:else if activeConversation}
       <div class="chat-header">
         <h2>{activeConversation.name}</h2>
+        <button
+          class="icon-btn"
+          onclick={() => (showMedia = true)}
+          title="Galerie média"
+          aria-label="Galerie média"
+        >
+          📎
+        </button>
       </div>
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
         {#each activeMessages as msg}
@@ -446,6 +470,14 @@
   </main>
 </div>
 
+<Settings bind:open={showSettings} />
+
+<MediaBrowser
+  bind:open={showMedia}
+  conversationId={messagingStore.activeConversationId}
+  conversationName={activeConversation?.name ?? ""}
+/>
+
 {#if lightboxSrc}
   <div
     class="lightbox"
@@ -470,6 +502,41 @@
   }
   .receipt-read {
     color: var(--accent, #3b82f6);
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .icon-btn {
+    background: transparent;
+    color: var(--text-secondary, #a1a1aa);
+    border: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+  }
+  .icon-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary, #e4e4e7);
+  }
+
+  .chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .chat-header h2 {
+    margin: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .new-msg-btn {
