@@ -86,9 +86,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          key: ${{ matrix.platform.target }}
           cache-on-failure: true
         continue-on-error: true  # First run has no cache; don't fail the matrix shard on a cold start.
-          key: ${{ matrix.platform.target }}
 
       - name: install node
         uses: actions/setup-node@v4
