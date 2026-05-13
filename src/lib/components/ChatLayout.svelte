@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { messagingStore } from "../stores/messaging.svelte";
 
@@ -22,9 +22,26 @@
     // on that event (see messaging.svelte.ts:initListeners).
   });
 
-  function selectConversation(id: string) {
+  async function selectConversation(id: string) {
     messagingStore.activeConversationId = id;
     showNewMessage = false;
+    // Fire READ receipts for every inbound (not-outgoing) message in the
+    // thread so the sender's client shows the blue double-check.
+    await messagingStore.loadMessages(id);
+    const msgs = messagingStore.getMessages(id) ?? [];
+    const inboundTimestamps = msgs
+      .filter((m) => !m.is_outgoing)
+      .map((m) => String(m.timestamp));
+    if (inboundTimestamps.length > 0) {
+      try {
+        await invoke("mark_conversation_read", {
+          conversationId: id,
+          messageTimestamps: inboundTimestamps,
+        });
+      } catch (e) {
+        console.warn("mark_conversation_read failed:", e);
+      }
+    }
   }
 
   async function handleSend() {
@@ -118,6 +135,19 @@
     const idx = name.lastIndexOf(".");
     if (idx < 0 || idx === name.length - 1) return "FILE";
     return name.slice(idx + 1).toUpperCase().slice(0, 5);
+  }
+
+  // Highest receipt level we have for an outgoing message — drives the bubble
+  // indicator (✓ sent, ✓✓ delivered, ✓✓ blue read). Returns null for incoming
+  // messages or when no receipt has arrived yet (i.e. "sent" only).
+  function receiptStatus(msgTimestamp: number, convId: string | null): "sent" | "delivered" | "read" {
+    if (!convId) return "sent";
+    const perChat = messagingStore.receipts.get(convId);
+    if (!perChat) return "sent";
+    const r = perChat.get(String(msgTimestamp));
+    if (!r) return "sent";
+    if (r.type === "viewed" || r.type === "read") return "read";
+    return "delivered";
   }
 
   function formatTime(timestamp: number): string {
@@ -375,6 +405,12 @@
                 <p>{msg.body}</p>
               {/if}
               <span class="msg-time">{formatTime(msg.timestamp)}</span>
+              {#if msg.is_outgoing}
+                {@const r = receiptStatus(msg.timestamp, messagingStore.activeConversationId)}
+                <span class="receipt receipt-{r}" title={r} aria-label={r}>
+                  {#if r === "sent"}✓{:else}✓✓{/if}
+                </span>
+              {/if}
             </div>
           </div>
         {/each}
@@ -425,6 +461,17 @@
 {/if}
 
 <style>
+  .receipt {
+    font-size: 0.78rem;
+    margin-left: 4px;
+    color: var(--text-secondary, #a1a1aa);
+    line-height: 1;
+    vertical-align: baseline;
+  }
+  .receipt-read {
+    color: var(--accent, #3b82f6);
+  }
+
   .new-msg-btn {
     background: var(--accent, #3b82f6);
     color: white;

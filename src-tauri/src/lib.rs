@@ -123,6 +123,7 @@ pub fn run() {
             commands::messaging::get_self_id,
             commands::messaging::send_to_recipient,
             commands::messaging::send_message_with_attachments,
+            commands::messaging::mark_conversation_read,
             commands::account::sign_out,
         ])
         .run(tauri::generate_context!())

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
+use uuid::Uuid;
 use presage::libsignal_service::content::ContentBody;
 use presage::libsignal_service::prelude::Content;
 use presage::libsignal_service::proto::{
@@ -23,11 +24,23 @@ use crate::messaging::types::{
     ReceiptEvent, ReceiptKind, TypingAction, TypingEvent,
 };
 
-struct SendRequest {
-    conversation_id: String,
-    body: String,
-    file_paths: Vec<String>,
-    reply: oneshot::Sender<Result<(), String>>,
+/// Things the dedicated messaging thread can be asked to send.
+enum SendRequest {
+    /// Send a regular DataMessage (text + optional attachments).
+    Text {
+        conversation_id: String,
+        body: String,
+        file_paths: Vec<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Send a ReceiptMessage (DELIVERY / READ / VIEWED) back to the sender of
+    /// one or more incoming messages, identified by their original timestamps.
+    Receipt {
+        recipient_uuid: Uuid,
+        kind: ReceiptKind,
+        timestamps: Vec<u64>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Core messaging service.
@@ -150,7 +163,7 @@ impl MessagingService {
         *self.db_passphrase.lock().await = Some(passphrase.to_string());
 
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendRequest>();
-        *self.send_tx.lock().await = Some(send_tx);
+        *self.send_tx.lock().await = Some(send_tx.clone());
 
         let self_aci = self.self_aci.clone();
         let on_event = Arc::new(on_event);
@@ -158,6 +171,7 @@ impl MessagingService {
         let mut mgr_send = mgr.clone();
         let mgr_download = mgr.clone();
         let mut mgr_recv = mgr;
+        let send_tx_recv = send_tx.clone();
         let attachments_dir = self
             .db_path
             .parent()
@@ -195,6 +209,11 @@ impl MessagingService {
                                     info!("contacts synced");
                                 }
                                 presage::model::messages::Received::Content(content) => {
+                                    auto_delivery_receipt(
+                                        &content,
+                                        &self_aci_val,
+                                        &send_tx_recv,
+                                    );
                                     process_content(
                                         &content,
                                         &self_aci_val,
@@ -220,16 +239,7 @@ impl MessagingService {
         tokio::task::spawn_local(async move {
             info!("send handler ready");
             while let Some(req) = send_rx.recv().await {
-                info!("processing send to {}", req.conversation_id);
-                let result =
-                    do_send(&mut mgr_send, &req.conversation_id, &req.body, &req.file_paths)
-                        .await;
-                if let Err(ref e) = result {
-                    error!("send failed: {}", e);
-                } else {
-                    info!("message sent successfully");
-                }
-                let _ = req.reply.send(result);
+                handle_send_request(&mut mgr_send, req).await;
             }
         });
     }
@@ -243,7 +253,7 @@ impl MessagingService {
         F: Fn(InboundEvent) + Send + Sync + 'static,
     {
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendRequest>();
-        *self.send_tx.lock().await = Some(send_tx);
+        *self.send_tx.lock().await = Some(send_tx.clone());
 
         let self_aci = self.self_aci.clone();
         let on_event = Arc::new(on_event);
@@ -282,6 +292,7 @@ impl MessagingService {
                             // Spawn receive loop as a local task
                             let self_aci_recv = self_aci.clone();
                             let on_event_recv = on_event.clone();
+                            let send_tx_recv = send_tx.clone();
                             tokio::task::spawn_local(async move {
                                 loop {
                                     info!("starting receive loop");
@@ -299,6 +310,11 @@ impl MessagingService {
                                                         info!("contacts synced");
                                                     }
                                                     presage::model::messages::Received::Content(content) => {
+                                                        auto_delivery_receipt(
+                                                            &content,
+                                                            &self_aci_val,
+                                                            &send_tx_recv,
+                                                        );
                                                         process_content(
                                                             &content,
                                                             &self_aci_val,
@@ -323,20 +339,7 @@ impl MessagingService {
                             // Process sends on this task (same LocalSet, same thread)
                             info!("send handler ready");
                             while let Some(req) = send_rx.recv().await {
-                                info!("processing send to {}", req.conversation_id);
-                                let result = do_send(
-                                    &mut mgr_send,
-                                    &req.conversation_id,
-                                    &req.body,
-                                    &req.file_paths,
-                                )
-                                .await;
-                                if let Err(ref e) = result {
-                                    error!("send failed: {}", e);
-                                } else {
-                                    info!("message sent successfully");
-                                }
-                                let _ = req.reply.send(result);
+                                handle_send_request(&mut mgr_send, req).await;
                             }
                         })
                         .await;
@@ -366,7 +369,7 @@ impl MessagingService {
         let tx = tx_guard.as_ref().ok_or("messaging not started")?;
 
         let (reply_tx, reply_rx) = oneshot::channel();
-        tx.send(SendRequest {
+        tx.send(SendRequest::Text {
             conversation_id: conversation_id.to_string(),
             body: body.to_string(),
             file_paths,
@@ -374,6 +377,35 @@ impl MessagingService {
         })
         .map_err(|_| "send channel closed".to_string())?;
 
+        drop(tx_guard);
+
+        reply_rx
+            .await
+            .map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Send a receipt (DELIVERY / READ / VIEWED) back to a recipient for one
+    /// or more inbound messages.
+    pub async fn send_receipt(
+        &self,
+        recipient_uuid: Uuid,
+        kind: ReceiptKind,
+        timestamps: Vec<u64>,
+    ) -> Result<(), String> {
+        if timestamps.is_empty() {
+            return Ok(());
+        }
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Receipt {
+            recipient_uuid,
+            kind,
+            timestamps,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
 
         reply_rx
@@ -510,6 +542,127 @@ async fn process_content(
         }
         on_event(ev);
     }
+}
+
+/// Fire a DELIVERY receipt for a freshly-received DataMessage.
+///
+/// Skips: own messages (sync from another linked device), non-DataMessage content
+/// (typing indicators, receipts themselves, sync messages), and any envelope
+/// where the sender UUID can't be resolved. Failure to enqueue the receipt is
+/// not propagated — the receive loop must keep going.
+fn auto_delivery_receipt(
+    content: &Content,
+    self_aci: &Option<String>,
+    send_tx: &mpsc::UnboundedSender<SendRequest>,
+) {
+    use presage::libsignal_service::content::ContentBody;
+
+    // Only acknowledge real DataMessages. Sync / typing / receipt envelopes
+    // don't need delivery receipts and would create a feedback loop with
+    // peers that auto-ack receipts of their own.
+    let timestamp = match &content.body {
+        ContentBody::DataMessage(dm) => dm.timestamp.unwrap_or(content.metadata.timestamp),
+        ContentBody::EditMessage(em) => em.target_sent_timestamp.unwrap_or(content.metadata.timestamp),
+        _ => return,
+    };
+
+    let sender_uuid = content.metadata.sender.raw_uuid();
+    let sender_str = sender_uuid.to_string();
+
+    // Don't ack ourselves — sync envelopes from our other linked devices.
+    if Some(&sender_str) == self_aci.as_ref() {
+        return;
+    }
+
+    let (reply_tx, _reply_rx) = oneshot::channel();
+    let req = SendRequest::Receipt {
+        recipient_uuid: sender_uuid,
+        kind: ReceiptKind::Delivered,
+        timestamps: vec![timestamp],
+        reply: reply_tx,
+    };
+    if send_tx.send(req).is_err() {
+        warn!("auto delivery receipt: send channel closed");
+    }
+}
+
+/// Dispatch a send-thread request: text/attachment message vs receipt message.
+async fn handle_send_request(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    req: SendRequest,
+) {
+    match req {
+        SendRequest::Text {
+            conversation_id,
+            body,
+            file_paths,
+            reply,
+        } => {
+            info!("processing send to {}", conversation_id);
+            let result = do_send(mgr, &conversation_id, &body, &file_paths).await;
+            if let Err(ref e) = result {
+                error!("send failed: {}", e);
+            } else {
+                info!("message sent successfully");
+            }
+            let _ = reply.send(result);
+        }
+        SendRequest::Receipt {
+            recipient_uuid,
+            kind,
+            timestamps,
+            reply,
+        } => {
+            info!(
+                "processing {:?} receipt to {} for {} message(s)",
+                kind,
+                recipient_uuid,
+                timestamps.len()
+            );
+            let result = do_send_receipt(mgr, recipient_uuid, kind, timestamps).await;
+            if let Err(ref e) = result {
+                error!("receipt send failed: {}", e);
+            } else {
+                info!("receipt sent successfully");
+            }
+            let _ = reply.send(result);
+        }
+    }
+}
+
+/// Send a single ReceiptMessage envelope back to a recipient.
+async fn do_send_receipt(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    recipient_uuid: Uuid,
+    kind: ReceiptKind,
+    timestamps: Vec<u64>,
+) -> Result<(), String> {
+    use presage::libsignal_service::content::ContentBody;
+    use presage::libsignal_service::proto::receipt_message;
+    use presage::libsignal_service::protocol::{Aci, ServiceId};
+
+    let proto_kind = match kind {
+        ReceiptKind::Delivered => receipt_message::Type::Delivery,
+        ReceiptKind::Read => receipt_message::Type::Read,
+        ReceiptKind::Viewed => receipt_message::Type::Viewed,
+    };
+
+    let receipt = ReceiptMessage {
+        r#type: Some(proto_kind as i32),
+        timestamp: timestamps,
+    };
+
+    // Receipts are stamped with their own envelope timestamp; the inner
+    // `timestamp` repeated field references the message(s) being acknowledged.
+    let envelope_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+
+    let recipient = ServiceId::Aci(Aci::from(recipient_uuid));
+    mgr.send_message(recipient, ContentBody::ReceiptMessage(receipt), envelope_ts)
+        .await
+        .map_err(|e| format!("send_receipt: {}", e))
 }
 
 async fn do_send(

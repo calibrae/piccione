@@ -87,3 +87,39 @@ pub async fn send_message_with_attachments(
     }
     result
 }
+
+/// Send a READ receipt to the given conversation for the supplied message
+/// timestamps. Called by the front-end when the user opens / focuses a
+/// conversation so the sender's client can show "read" indicators.
+#[tauri::command]
+pub async fn mark_conversation_read(
+    app: AppHandle,
+    conversation_id: String,
+    message_timestamps: Vec<String>,
+) -> Result<(), String> {
+    use uuid::Uuid;
+    let state = app.state::<crate::AppState>();
+
+    // Resolve recipient UUID. Conversations come in as ACI strings for 1:1.
+    // Group threads have a hex-encoded master key — receipts there work
+    // differently (per-member) and aren't handled by this command yet.
+    let recipient = Uuid::parse_str(&conversation_id)
+        .map_err(|_| "mark_conversation_read: not a 1:1 conversation".to_string())?;
+
+    let timestamps: Vec<u64> = message_timestamps
+        .iter()
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    if timestamps.is_empty() {
+        return Ok(());
+    }
+
+    state
+        .messaging
+        .send_receipt(
+            recipient,
+            crate::messaging::types::ReceiptKind::Read,
+            timestamps,
+        )
+        .await
+}
