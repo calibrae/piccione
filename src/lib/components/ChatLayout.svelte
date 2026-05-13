@@ -85,7 +85,8 @@
       });
       if (result) {
         const paths = Array.isArray(result) ? result : [result];
-        pendingFiles = [...pendingFiles, ...paths.map(p => typeof p === 'string' ? p : p.path)];
+        // Tauri 2's open() returns string|string[]|null — already unwrapped.
+        pendingFiles = [...pendingFiles, ...paths];
       }
     } catch (e) {
       console.error("File picker error:", e);
