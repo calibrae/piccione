@@ -53,7 +53,7 @@ jobs:
               src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
           - name: linux-x64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact_glob: |
               src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
@@ -86,6 +86,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          cache-on-failure: true
+        continue-on-error: true  # First run has no cache; don't fail the matrix shard on a cold start.
           key: ${{ matrix.platform.target }}
 
       - name: install node
@@ -97,12 +99,11 @@ jobs:
       # --- Linux system deps --------------------------------------------------
 
       - name: install linux build deps
-        if: matrix.platform.runner == 'ubuntu-22.04'
+        if: matrix.platform.runner == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
             librsvg2-dev \
             patchelf \
             libssl-dev \
@@ -193,7 +194,7 @@ jobs:
       # --- Linux: also produce a tarball of the binary -----------------------
 
       - name: linux tarball
-        if: matrix.platform.runner == 'ubuntu-22.04'
+        if: matrix.platform.runner == 'ubuntu-24.04'
         run: |
           BIN=src-tauri/target/${{ matrix.platform.target }}/release/piccione
           TARBALL=piccione-linux-x86_64.tar.gz
@@ -221,7 +222,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
