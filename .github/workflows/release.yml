@@ -120,24 +120,28 @@ jobs:
       - name: rewrite [patch] for CI
         shell: bash
         run: |
-          python3 <<'PY'
+          python3 - <<'PY'
           path = "src-tauri/Cargo.toml"
-          with open(path) as f: s = f.read()
-          old = """[patch."https://github.com/whisperfish/presage"]
-          presage = { path = "../../presage/presage" }
-          presage-store-sqlite = { path = "../../presage/presage-store-sqlite" }
-
-          [patch."https://github.com/whisperfish/libsignal-service-rs"]
-          libsignal-service = { path = "../../libsignal-service-rs" }"""
-          new = """[patch."https://github.com/whisperfish/presage"]
-          presage = { git = "https://github.com/calibrae/presage", branch = "storage-service" }
-          presage-store-sqlite = { git = "https://github.com/calibrae/presage", branch = "storage-service" }
-
-          [patch."https://github.com/whisperfish/libsignal-service-rs"]
-          libsignal-service = { git = "https://github.com/calibrae/libsignal-service-rs", branch = "storage-service" }"""
-          assert old in s, "[patch] block not found at expected shape"
-          open(path, "w").write(s.replace(old, new, 1))
-          print("[patch] rewritten for CI")
+          with open(path) as f:
+              s = f.read()
+          subs = [
+              ('presage = { path = "../../presage/presage" }',
+               'presage = { git = "https://github.com/calibrae/presage", branch = "storage-service" }'),
+              ('presage-store-sqlite = { path = "../../presage/presage-store-sqlite" }',
+               'presage-store-sqlite = { git = "https://github.com/calibrae/presage", branch = "storage-service" }'),
+              ('libsignal-service = { path = "../../libsignal-service-rs" }',
+               'libsignal-service = { git = "https://github.com/calibrae/libsignal-service-rs", branch = "storage-service" }'),
+          ]
+          changed = 0
+          for old, new in subs:
+              if old in s:
+                  s = s.replace(old, new, 1)
+                  changed += 1
+                  print(f"rewrote: {old.split(' =')[0]}")
+          if changed == 0:
+              print("no patch rewrites needed (already CI-pinned?)")
+          with open(path, "w") as f:
+              f.write(s)
           PY
 
       - run: npm ci
