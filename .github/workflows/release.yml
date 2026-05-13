@@ -1,0 +1,250 @@
+# Multi-platform build + release for Piccione.
+#
+# Triggers:
+#   * Tag push matching `v*` → full release: build all platforms, sign macOS,
+#     create a GitHub Release with the artifacts attached.
+#   * workflow_dispatch (manual) → build all platforms, publish nothing,
+#     leave the artifacts for download from the run page.
+#
+# macOS signing/notarisation requires these repository secrets:
+#   APPLE_CERTIFICATE          base64 .p12 export of "Developer ID Application: Nico Bousquet"
+#   APPLE_CERTIFICATE_PASSWORD password used when exporting the .p12
+#   APPLE_SIGNING_IDENTITY     full identity string, e.g. "Developer ID Application: Nico Bousquet (XJQQCN392F)"
+#   APPLE_ID                   Apple ID email
+#   APPLE_PASSWORD             app-specific password from appleid.apple.com (NOT your iCloud password)
+#   APPLE_TEAM_ID              XJQQCN392F
+#
+# Windows signing is intentionally not wired yet — MSI ships unsigned.
+# Linux package signing (deb/rpm) likewise.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macos-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            artifact_glob: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+          - name: macos-x64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            artifact_glob: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+          - name: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact_glob: |
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_glob: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Submodules / patched deps live in sibling repos via the
+          # workspace Cargo.toml [patch] section. CI overrides those
+          # patches to point at the public calibrae forks instead of
+          # local paths — see the "patch override" step below.
+          fetch-depth: 0
+
+      # --- Toolchain ----------------------------------------------------------
+
+      - name: install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.platform.target }}
+
+      - name: install node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # --- Linux system deps --------------------------------------------------
+
+      - name: install linux build deps
+        if: matrix.platform.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            rpm
+
+      # --- Patch overrides for CI ---------------------------------------------
+      #
+      # The repo's `src-tauri/Cargo.toml` points at local sibling checkouts
+      # (../../presage, ../../libsignal-service-rs) for dev. In CI those
+      # paths don't exist; rewrite them to point at the public forks at
+      # calibrae/* before building.
+
+      - name: rewrite [patch] for CI
+        shell: bash
+        run: |
+          python3 <<'PY'
+          path = "src-tauri/Cargo.toml"
+          with open(path) as f: s = f.read()
+          old = """[patch."https://github.com/whisperfish/presage"]
+          presage = { path = "../../presage/presage" }
+          presage-store-sqlite = { path = "../../presage/presage-store-sqlite" }
+
+          [patch."https://github.com/whisperfish/libsignal-service-rs"]
+          libsignal-service = { path = "../../libsignal-service-rs" }"""
+          new = """[patch."https://github.com/whisperfish/presage"]
+          presage = { git = "https://github.com/calibrae/presage", branch = "storage-service" }
+          presage-store-sqlite = { git = "https://github.com/calibrae/presage", branch = "storage-service" }
+
+          [patch."https://github.com/whisperfish/libsignal-service-rs"]
+          libsignal-service = { git = "https://github.com/calibrae/libsignal-service-rs", branch = "storage-service" }"""
+          assert old in s, "[patch] block not found at expected shape"
+          open(path, "w").write(s.replace(old, new, 1))
+          print("[patch] rewritten for CI")
+          PY
+
+      - run: npm ci
+
+      # --- macOS signing setup ------------------------------------------------
+
+      - name: import apple signing certificate
+        if: startsWith(matrix.platform.runner, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE not set; macOS build will be unsigned"
+            exit 0
+          fi
+          # Create a fresh keychain dedicated to this run.
+          KC=$RUNNER_TEMP/build.keychain
+          KC_PASS=$(openssl rand -hex 16)
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KC" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC"
+          rm "$RUNNER_TEMP/cert.p12"
+
+      # --- Build -------------------------------------------------------------
+
+      - name: build (with macos sign+notarize)
+        if: startsWith(matrix.platform.runner, 'macos')
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose
+
+      - name: build (linux/windows)
+        if: "!startsWith(matrix.platform.runner, 'macos')"
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose
+
+      # --- Linux: also produce a tarball of the binary -----------------------
+
+      - name: linux tarball
+        if: matrix.platform.runner == 'ubuntu-22.04'
+        run: |
+          BIN=src-tauri/target/${{ matrix.platform.target }}/release/piccione
+          TARBALL=piccione-linux-x86_64.tar.gz
+          tar -czvf "$TARBALL" -C "$(dirname $BIN)" "$(basename $BIN)" \
+            -C "$GITHUB_WORKSPACE/src-tauri" icons \
+            -C "$GITHUB_WORKSPACE" README.md LICENSE
+          echo "linux tarball:"; ls -lh "$TARBALL"
+
+      # --- Upload artifacts (for non-tag builds and as a sanity output) ------
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: piccione-${{ matrix.platform.name }}
+          path: |
+            ${{ matrix.platform.artifact_glob }}
+            piccione-linux-x86_64.tar.gz
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # --------------------------------------------------------------------------
+  # Release job: only on tag push. Consumes the upload-artifact bundles from
+  # the matrix and attaches them to a single GitHub Release.
+  # --------------------------------------------------------------------------
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: list collected artifacts
+        run: |
+          find artifacts -type f -printf '%p  %s bytes\n' | sort
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/piccione-linux-x86_64.tar.gz
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}

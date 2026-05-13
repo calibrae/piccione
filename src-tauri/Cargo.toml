@@ -1,20 +1,20 @@
 [package]
-name = "signalui"
+name = "piccione"
 version = "0.0.1"
 edition = "2021"
-default-run = "signalui"
+default-run = "piccione"
 
 [lib]
-name = "signalui_lib"
+name = "piccione_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "signalui"
+name = "piccione"
 path = "src/main.rs"
 
 [[bin]]
-name = "signalui-cli"
-path = "src/bin/signalui_cli.rs"
+name = "piccione-cli"
+path = "src/bin/piccione_cli.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

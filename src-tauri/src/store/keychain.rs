@@ -19,7 +19,7 @@ use security_framework::passwords::{
 };
 use zeroize::Zeroizing;
 
-pub const SERVICE_NAME: &str = "com.signalui.app";
+pub const SERVICE_NAME: &str = "app.piccione";
 pub const DB_KEY_ACCOUNT: &str = "signalui-db-encryption-key";
 
 /// macOS Security framework error code for "item not found".

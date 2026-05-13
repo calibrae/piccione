@@ -3658,6 +3658,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "piccione"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "futures",
+ "hex",
+ "image",
+ "mimalloc",
+ "mime_guess",
+ "mockall",
+ "presage",
+ "presage-store-sqlite",
+ "prost 0.13.5",
+ "qrcode",
+ "rand 0.8.5",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5111,39 +5144,6 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
-]
-
-[[package]]
-name = "signalui"
-version = "0.0.1"
-dependencies = [
- "base64 0.22.1",
- "clap",
- "futures",
- "hex",
- "image",
- "mimalloc",
- "mime_guess",
- "mockall",
- "presage",
- "presage-store-sqlite",
- "prost 0.13.5",
- "qrcode",
- "rand 0.8.5",
- "security-framework",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "zeroize",
 ]
 
 [[package]]

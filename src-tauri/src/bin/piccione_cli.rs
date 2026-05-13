@@ -27,10 +27,10 @@ use presage::model::identity::OnNewIdentity;
 use presage::Manager;
 use presage_store_sqlite::SqliteStore;
 use qrcode::QrCode;
-use signalui_lib::pair_flow::{run_pair, PairOutcome, QrResult};
-use signalui_lib::store::keychain::resolve_db_passphrase_for_cli;
+use piccione_lib::pair_flow::{run_pair, PairOutcome, QrResult};
+use piccione_lib::store::keychain::resolve_db_passphrase_for_cli;
 
-const APP_BUNDLE_ID: &str = "com.signalui.app";
+const APP_BUNDLE_ID: &str = "app.piccione";
 const PAIR_DEVICE_NAME: &str = "signalui-pair-once";
 const PAIR_QR_PATH: &str = "/tmp/signalui-pair.png";
 const PAIR_TIMEOUT_SECS: u64 = 300;

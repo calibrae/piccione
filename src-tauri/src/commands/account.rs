@@ -7,7 +7,7 @@
 //!
 //! This is intentionally **destructive**: deleting the passphrase makes the
 //! encrypted SQLite store unreadable. We do *not* delete the SQLite file
-//! itself — the user can wipe `~/Library/Application Support/com.signalui.app/`
+//! itself — the user can wipe `~/Library/Application Support/app.piccione/`
 //! manually if they want a clean re-link, but losing the key alone is enough
 //! to force a fresh provision on next start.
 
