@@ -37,7 +37,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-util = "0.7"
 futures = "0.3"
 url = "2"
-security-framework = "3"
 rand = "0.8"
 hex = "0.4"
 uuid = "1"

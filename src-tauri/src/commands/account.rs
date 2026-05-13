@@ -14,7 +14,7 @@
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
-use crate::store::keychain::{self, KeychainBackend, SystemKeychain};
+use crate::store::keychain::{self, KeychainBackend, NullKeychain};
 
 /// Result of a sign-out call. Reports which side-effects actually happened so
 /// the UI can render an honest confirmation toast.
@@ -35,7 +35,7 @@ pub async fn sign_out(app: AppHandle) -> Result<SignOutReport, String> {
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {}", e))?;
 
-    let report = sign_out_with(&SystemKeychain, &data_dir).map_err(|e| e.to_string())?;
+    let report = sign_out_with(&NullKeychain, &data_dir).map_err(|e| e.to_string())?;
     info!(
         "sign_out: keychain={} db_key={} db_key_bak={}",
         report.keychain_cleared, report.db_key_file_removed, report.db_key_bak_removed

@@ -1,31 +1,26 @@
 //! Database passphrase storage.
 //!
-//! Strategy:
-//!   1. Prefer macOS Keychain (`security-framework`).
-//!   2. If Keychain is empty but a legacy `.db_key` file exists, migrate it
-//!      into the Keychain. The file is renamed to `.db_key.bak` instead of
-//!      deleted, so a Keychain corruption does not lock Cali out of his
-//!      messages while the feature is still young.
-//!   3. If neither exists, generate a fresh 64-hex passphrase, store it in
-//!      the Keychain, and write a `.db_key` mirror as a belt-and-braces
-//!      fallback (also 0600).
+//! Strategy: read/write a 0600 `.db_key` file in the app data dir. The
+//! macOS Keychain is intentionally not used in production builds — see
+//! `inbox/memory-accounting.md` for why (multiple-binary ACL prompts on
+//! dev builds, entitlement requirements for the Data Protection Keychain).
+//! The crate-platform `security-framework` dep was dropped too, which is
+//! also why this code now compiles cleanly on Linux + Windows.
 //!
 //! The whole module is generic over a tiny [`KeychainBackend`] trait so the
 //! tests can swap in an in-memory HashMap and stay deterministic.
 
-use security_framework::base::Error as SfError;
-use security_framework::passwords::{
-    delete_generic_password, get_generic_password, set_generic_password,
-};
 use zeroize::Zeroizing;
 
 pub const SERVICE_NAME: &str = "app.piccione";
 pub const DB_KEY_ACCOUNT: &str = "signalui-db-encryption-key";
 
-/// macOS Security framework error code for "item not found".
-const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-
-/// Abstract keychain operations so we can mock them in tests.
+/// Abstract keychain operations so unit tests can swap in an in-memory map.
+/// In production we no longer use the macOS Keychain at all — the
+/// passphrase lives in a 0600 `.db_key` file in the app data dir — so the
+/// only real implementor in production builds is the no-op `NullKeychain`.
+/// The trait is kept so tests that drive `get_or_create_db_passphrase_with`
+/// against an in-memory backend remain useful regression cases.
 pub trait KeychainBackend: Send + Sync {
     /// Returns `Ok(None)` if the item is missing.
     fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, KeychainError>;
@@ -34,34 +29,20 @@ pub trait KeychainBackend: Send + Sync {
     fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError>;
 }
 
-/// Real macOS Keychain backed by `security-framework`.
-pub struct SystemKeychain;
+/// Production keychain backend: a no-op. Settings live in `.db_key` on disk;
+/// we keep this struct so the sign-out command has something to call.
+pub struct NullKeychain;
 
-impl KeychainBackend for SystemKeychain {
-    fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, KeychainError> {
-        match get_generic_password(service, account) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if is_not_found(&e) => Ok(None),
-            Err(e) => Err(KeychainError::AccessFailed(e.to_string())),
-        }
+impl KeychainBackend for NullKeychain {
+    fn get(&self, _service: &str, _account: &str) -> Result<Option<Vec<u8>>, KeychainError> {
+        Ok(None)
     }
-
-    fn set(&self, service: &str, account: &str, password: &[u8]) -> Result<(), KeychainError> {
-        set_generic_password(service, account, password)
-            .map_err(|e| KeychainError::StoreFailed(e.to_string()))
+    fn set(&self, _service: &str, _account: &str, _password: &[u8]) -> Result<(), KeychainError> {
+        Ok(())
     }
-
-    fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError> {
-        match delete_generic_password(service, account) {
-            Ok(()) => Ok(()),
-            Err(e) if is_not_found(&e) => Ok(()),
-            Err(e) => Err(KeychainError::DeleteFailed(e.to_string())),
-        }
+    fn delete(&self, _service: &str, _account: &str) -> Result<(), KeychainError> {
+        Ok(())
     }
-}
-
-fn is_not_found(e: &SfError) -> bool {
-    e.code() == ERR_SEC_ITEM_NOT_FOUND
 }
 
 /// Public entry point — production code uses this.
@@ -169,7 +150,7 @@ pub fn get_or_create_db_passphrase_with<K: KeychainBackend>(
 /// passphrase in `AppState::db_passphrase`.
 #[allow(dead_code)] // public ergonomic wrapper; sign_out goes through delete_db_passphrase_with directly
 pub fn delete_db_passphrase() -> Result<(), KeychainError> {
-    delete_db_passphrase_with(&SystemKeychain)
+    delete_db_passphrase_with(&NullKeychain)
 }
 
 /// Backend-generic variant for unit tests.
