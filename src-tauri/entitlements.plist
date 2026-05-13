@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- WebKit's JavaScriptCore needs JIT to run. Without this Tauri's
+         WebView either runs slowly (interpreted only) or crashes on
+         pages that allocate executable memory. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Network access for talking to Signal's servers + the storage
+         service. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- WebKit on macOS uses XPC services that need to be loadable. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
