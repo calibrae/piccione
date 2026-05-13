@@ -15,6 +15,11 @@ path = "src/main.rs"
 [[bin]]
 name = "piccione-cli"
 path = "src/bin/piccione_cli.rs"
+# Power-user CLI for pair / paired / devices subcommands. Gated behind a
+# feature so `cargo build` (and tauri bundling) skips it by default —
+# tauri 2 chokes on multi-bin targets when building Universal macOS
+# binaries because it tries to lipo every bin and we only fuse the GUI.
+required-features = ["cli"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -55,6 +60,10 @@ mockall = "0.13"
 
 [features]
 test = ["tauri/test"]
+# Build the piccione-cli helper binary. Off by default so tauri's
+# bundler / Universal-macOS build don't try to lipo it. Power users
+# wanting the CLI invoke: `cargo build --features cli --bin piccione-cli`.
+cli = []
 
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
