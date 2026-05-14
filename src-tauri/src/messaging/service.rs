@@ -819,8 +819,32 @@ async fn download_attachments(
                 let ext = mime_guess::get_mime_extensions_str(&att.mime_type)
                     .and_then(|exts| exts.first())
                     .unwrap_or(&"bin");
-                let filename = format!("{}_{}.{}", att.id, att.file_name, ext);
+                // SECURITY: att.file_name is sender-controlled (straight off
+                // the AttachmentPointer wire) — never let it touch the path.
+                // Derive the on-disk name from the server CDN id only, and
+                // hard-filter that to an alphanumeric/-/_ allowlist so a
+                // crafted CdnKey can't traverse or absolute-path out of
+                // att_dir either. file_name stays as display-only metadata
+                // on AttachmentInfo for the UI.
+                let safe_id: String = att
+                    .id
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .take(128)
+                    .collect();
+                let safe_id = if safe_id.is_empty() {
+                    "attachment".to_string()
+                } else {
+                    safe_id
+                };
+                let filename = format!("{}.{}", safe_id, ext);
                 let path = att_dir.join(&filename);
+                // Belt-and-braces: confirm the resolved path is still inside
+                // att_dir before writing.
+                if path.parent() != Some(att_dir) {
+                    error!("attachment path escaped att_dir, refusing: {:?}", path);
+                    continue;
+                }
                 if let Err(e) = std::fs::write(&path, &data) {
                     error!("failed to save attachment: {}", e);
                     continue;
