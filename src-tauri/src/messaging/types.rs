@@ -305,7 +305,10 @@ mod tests {
 
     #[test]
     fn receipt_kind_serializes_lowercase() {
-        assert_eq!(serde_json::to_value(ReceiptKind::Delivered).unwrap(), "delivered");
+        assert_eq!(
+            serde_json::to_value(ReceiptKind::Delivered).unwrap(),
+            "delivered"
+        );
         assert_eq!(serde_json::to_value(ReceiptKind::Read).unwrap(), "read");
         assert_eq!(serde_json::to_value(ReceiptKind::Viewed).unwrap(), "viewed");
     }
