@@ -6,6 +6,7 @@
   import { settingsStore } from "../stores/settings.svelte";
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
+  import { callingStore } from "../stores/calling.svelte";
 
   let inputText = $state("");
   let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -371,6 +372,21 @@
     {:else if activeConversation}
       <div class="chat-header">
         <h2>{activeConversation.name}</h2>
+        {#if !activeConversation.is_group}
+          <button
+            class="icon-btn"
+            onclick={() =>
+              callingStore.startCall(
+                activeConversation.id,
+                activeConversation.name,
+              )}
+            disabled={callingStore.active}
+            title="Appel vocal"
+            aria-label="Appel vocal"
+          >
+            📞
+          </button>
+        {/if}
         <button
           class="icon-btn"
           onclick={() => (showMedia = true)}
