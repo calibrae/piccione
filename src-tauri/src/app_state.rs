@@ -24,6 +24,10 @@ pub struct AppState {
     /// `get_link_status` before the cold-loaded manager has populated
     /// `self_aci`, and falsely thinks the device is unpaired.
     pub startup_complete: Arc<Notify>,
+    /// The voice-calling subsystem. Spawned in lib.rs `setup` once the Tauri
+    /// AppHandle exists (it needs an event-emit closure). `OnceLock` because
+    /// it's written exactly once and read by the calling Tauri commands.
+    pub calling: Arc<std::sync::OnceLock<crate::calling::manager::CallController>>,
 }
 
 impl AppState {
@@ -56,6 +60,7 @@ impl AppState {
             db_passphrase,
             startup_complete: Arc::new(Notify::new()),
             settings: Arc::new(Mutex::new(settings)),
+            calling: Arc::new(std::sync::OnceLock::new()),
         }
     }
 

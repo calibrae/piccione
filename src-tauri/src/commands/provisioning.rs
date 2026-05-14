@@ -6,10 +6,7 @@ use crate::provisioning::state::ProvisioningState;
 const PROVISIONING_EVENT: &str = "provisioning-state-changed";
 
 #[tauri::command]
-pub async fn start_provisioning(
-    app: AppHandle,
-    device_name: String,
-) -> Result<(), String> {
+pub async fn start_provisioning(app: AppHandle, device_name: String) -> Result<(), String> {
     let app_state = app.state::<AppState>();
     let provisioning = app_state.provisioning.clone();
     let messaging = app_state.messaging.clone();

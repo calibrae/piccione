@@ -48,6 +48,14 @@ mime_guess = "2"
 prost = "0.13"
 clap = { version = "4", features = ["derive"] }
 
+# Voice calls. RingRTC is Signal's own Rust WebRTC engine. The
+# prebuilt_webrtc feature makes its build.rs download a prebuilt
+# libwebrtc.a from build-artifacts.signal.org instead of compiling
+# Chromium — verified working on macOS/Linux/Windows (Phase-0 spike).
+# Needs PREBUILT_WEBRTC=1 in the build env (see CI + README).
+ringrtc = { git = "https://github.com/signalapp/ringrtc", tag = "v2.69.0", features = ["prebuilt_webrtc"] }
+log = "0.4"  # ringrtc::webrtc::logging::set_logger wants a log::LevelFilter
+
 # mimalloc as global allocator. macOS default malloc holds onto freed pages
 # very aggressively, inflating RSS after one-shot allocations like the
 # Storage-Service contact sync. mimalloc with the default "purge after idle"

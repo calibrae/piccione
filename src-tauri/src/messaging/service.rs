@@ -44,6 +44,14 @@ enum SendRequest {
         timestamps: Vec<u64>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Send a CallMessage (voice-call signaling) to a recipient. Enqueued by
+    /// the calling subsystem's `SignalingSender` bridge. Fire-and-forget —
+    /// RingRTC retransmits ICE on its own schedule, so a dropped send isn't
+    /// fatal and we don't make the call thread wait on a reply.
+    CallMessage {
+        recipient_uuid: Uuid,
+        call_message: presage::libsignal_service::proto::CallMessage,
+    },
 }
 
 /// Core messaging service.
@@ -65,6 +73,16 @@ pub struct MessagingService {
     /// `mark_conversation_read` command both consult this before
     /// enqueueing a Receipt SendRequest.
     pub read_receipts_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// This linked device's Signal device id, surfaced for the calling
+    /// subsystem (RingRTC signaling needs `local_device_id`). 0 until the
+    /// manager loads — read lazily by the call thread, which can't place or
+    /// receive a call before the manager is up anyway.
+    pub self_device_id: Arc<std::sync::atomic::AtomicU32>,
+    /// The calling subsystem, once spawned (lib.rs sets this after the Tauri
+    /// AppHandle exists). The receive loop routes inbound `CallMessage`
+    /// envelopes here. `None` until set — call messages arriving before then
+    /// are dropped, which is fine: there can't be a call in flight yet.
+    call_controller: Arc<Mutex<Option<crate::calling::manager::CallController>>>,
 }
 
 impl MessagingService {
@@ -79,6 +97,34 @@ impl MessagingService {
             // AppState::new overwrites this immediately after construction
             // with the value persisted in settings.json.
             read_receipts_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            self_device_id: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            call_controller: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Hand the messaging service a `CallController` so the receive loop can
+    /// route inbound CallMessage envelopes to it. Called once from lib.rs
+    /// setup after the calling thread is spawned.
+    pub async fn set_call_controller(
+        &self,
+        controller: crate::calling::manager::CallController,
+    ) {
+        *self.call_controller.lock().await = Some(controller);
+    }
+
+    /// Enqueue a CallMessage send. Fire-and-forget — used by the calling
+    /// subsystem's signaling bridge.
+    pub async fn send_call_message(
+        &self,
+        recipient_uuid: Uuid,
+        call_message: presage::libsignal_service::proto::CallMessage,
+    ) {
+        let tx_guard = self.send_tx.lock().await;
+        if let Some(tx) = tx_guard.as_ref() {
+            let _ = tx.send(SendRequest::CallMessage {
+                recipient_uuid,
+                call_message,
+            });
         }
     }
 
@@ -106,6 +152,10 @@ impl MessagingService {
                     .aci()
                     .service_id_string();
                 info!("loaded registered manager, aci={}", aci);
+                if let Some(dev) = mgr.registration_data().device_id {
+                    self.self_device_id
+                        .store(u32::from(dev), std::sync::atomic::Ordering::Relaxed);
+                }
                 *self.self_aci.lock().await = Some(aci);
                 *self.read_store.lock().await = Some(read_store);
                 *self.db_passphrase.lock().await = Some(passphrase.to_string());
@@ -149,6 +199,10 @@ impl MessagingService {
             .service_id_string();
         let read_store = mgr.store().clone();
         info!("starting messaging after provisioning, aci={}", aci);
+        if let Some(dev) = mgr.registration_data().device_id {
+            self.self_device_id
+                .store(u32::from(dev), std::sync::atomic::Ordering::Relaxed);
+        }
         *self.self_aci.lock().await = Some(aci);
         *self.read_store.lock().await = Some(read_store);
 
@@ -169,6 +223,10 @@ impl MessagingService {
             .aci()
             .service_id_string();
         info!("starting messaging locally after provisioning, aci={}", aci);
+        if let Some(dev) = mgr.registration_data().device_id {
+            self.self_device_id
+                .store(u32::from(dev), std::sync::atomic::Ordering::Relaxed);
+        }
         *self.self_aci.lock().await = Some(aci);
         *self.read_store.lock().await = Some(mgr.store().clone());
         *self.db_passphrase.lock().await = Some(passphrase.to_string());
@@ -220,6 +278,7 @@ impl MessagingService {
                 .parent()
                 .unwrap_or(std::path::Path::new("/tmp"))
                 .join("attachments"),
+            call_controller: self.call_controller.clone(),
         }
     }
 
@@ -453,6 +512,7 @@ struct MessagingContext {
     self_aci: Arc<Mutex<Option<String>>>,
     receipts_enabled: Arc<std::sync::atomic::AtomicBool>,
     attachments_dir: PathBuf,
+    call_controller: Arc<Mutex<Option<crate::calling::manager::CallController>>>,
 }
 
 /// The core messaging work, shared by both `start_*` entry points: sync
@@ -471,6 +531,7 @@ async fn run_messaging(
         self_aci,
         receipts_enabled,
         attachments_dir,
+        call_controller,
     } = ctx;
 
     let mut mgr_send = mgr.clone();
@@ -497,6 +558,7 @@ async fn run_messaging(
         send_tx,
         receipts_enabled,
         attachments_dir,
+        call_controller,
     ));
 
     info!("send handler ready");
@@ -517,7 +579,9 @@ async fn receive_loop(
     send_tx: mpsc::UnboundedSender<SendRequest>,
     receipts_enabled: Arc<std::sync::atomic::AtomicBool>,
     attachments_dir: PathBuf,
+    call_controller: Arc<Mutex<Option<crate::calling::manager::CallController>>>,
 ) {
+    use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
     loop {
         info!("starting receive loop");
@@ -530,6 +594,21 @@ async fn receive_loop(
                         Received::QueueEmpty => info!("message queue synced"),
                         Received::Contacts => info!("contacts synced"),
                         Received::Content(content) => {
+                            // Voice-call signaling routes to the calling
+                            // subsystem, not the WebView. It's not a
+                            // DataMessage so process_content / the delivery
+                            // receipt path are no-ops for it anyway.
+                            if let ContentBody::CallMessage(cm) = &content.body {
+                                if let Some(cc) =
+                                    call_controller.lock().await.as_ref()
+                                {
+                                    cc.on_call_message(
+                                        content.metadata.sender.raw_uuid(),
+                                        content.metadata.sender_device.into(),
+                                        cm.clone(),
+                                    );
+                                }
+                            }
                             auto_delivery_receipt(
                                 &content,
                                 &self_aci_val,
@@ -661,7 +740,34 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             }
             let _ = reply.send(result);
         }
+        SendRequest::CallMessage {
+            recipient_uuid,
+            call_message,
+        } => {
+            if let Err(e) = do_send_call_message(mgr, recipient_uuid, call_message).await {
+                error!("call message send failed: {}", e);
+            }
+        }
     }
+}
+
+/// Send a CallMessage (voice-call signaling) envelope to a recipient.
+async fn do_send_call_message(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    recipient_uuid: Uuid,
+    call_message: presage::libsignal_service::proto::CallMessage,
+) -> Result<(), String> {
+    use presage::libsignal_service::content::ContentBody;
+    use presage::libsignal_service::protocol::{Aci, ServiceId};
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let recipient = ServiceId::Aci(Aci::from(recipient_uuid));
+    mgr.send_message(recipient, ContentBody::CallMessage(call_message), timestamp)
+        .await
+        .map_err(|e| format!("send_call_message: {}", e))
 }
 
 /// Send a single ReceiptMessage envelope back to a recipient.

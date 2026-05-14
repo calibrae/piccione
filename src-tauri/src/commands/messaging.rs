@@ -1,5 +1,5 @@
 use tauri::{AppHandle, Manager};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::app_state::AppState;
 use crate::messaging::types::{ChatMessage, Conversation};
@@ -57,7 +57,11 @@ pub async fn send_to_recipient(
     recipient_id: String,
     body: String,
 ) -> Result<(), String> {
-    info!("send_to_recipient called: {} -> {}", recipient_id, body.len());
+    info!(
+        "send_to_recipient called: {} -> {}",
+        recipient_id,
+        body.len()
+    );
     let state = app.state::<AppState>();
     let result = state.messaging.send_message(&recipient_id, &body).await;
     match &result {
@@ -75,7 +79,11 @@ pub async fn send_message_with_attachments(
     body: String,
     file_paths: Vec<String>,
 ) -> Result<(), String> {
-    info!("send_message_with_attachments: {} files to {}", file_paths.len(), conversation_id);
+    info!(
+        "send_message_with_attachments: {} files to {}",
+        file_paths.len(),
+        conversation_id
+    );
     let state = app.state::<AppState>();
     let result = state
         .messaging
