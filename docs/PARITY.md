@@ -56,6 +56,19 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 5 (merged to main)
+
+- ✅ In-conversation message search
+- ✅ Jump-to-latest button + scroll-position-aware auto-scroll
+- ✅ Jumbomoji + full timestamp on hover
+- ✅ Apply incoming edits + "modifié" marker (was a latent bug: edits tracked, never shown)
+- ✅ Tap reply-quote to jump to + highlight the original
+- ✅ Inline audio/video playback (voice messages)
+
+**Session total: 22 Tier-A features merged. Coverage ~12 → ~30 of ~210.**
+Two latent bugs fixed along the way (deletions never hid messages;
+getMessages never applied edits) and the ChatLayout test suite restored.
+
 ## Shipped — wave 4 (merged to main)
 
 - ✅ Dock/taskbar unread badge
