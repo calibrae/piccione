@@ -275,6 +275,17 @@
     if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
     return d.toLocaleDateString([], { day: "numeric", month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
   }
+  // Show a sender name above an incoming group message when the sender
+  // changes (so runs from one person aren't repeatedly labelled).
+  function showSender(i: number): boolean {
+    if (!activeConversation?.is_group) return false;
+    const cur = activeMessages[i];
+    if (cur.is_outgoing) return false;
+    if (i === 0) return true;
+    const prev = activeMessages[i - 1];
+    return prev.is_outgoing || prev.sender_id !== cur.sender_id || isNewDay(i);
+  }
+
   // Index of messages that start a new day (for inserting a separator before).
   function isNewDay(i: number): boolean {
     if (i === 0) return true;
@@ -665,6 +676,9 @@
             <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
           {/if}
           <div class="message" class:outgoing={msg.is_outgoing}>
+            {#if showSender(i)}
+              <span class="sender-label">{msg.sender_name}</span>
+            {/if}
             <div class="msg-actions">
               <button
                 class="reply-action"
@@ -879,6 +893,13 @@
 {/if}
 
 <style>
+  .sender-label {
+    display: block;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--accent, #3b82f6);
+    margin: 2px 0 1px 2px;
+  }
   .convo-bottom {
     display: flex;
     align-items: center;
