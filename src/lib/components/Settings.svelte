@@ -2,6 +2,7 @@
   import { settingsStore, type Theme } from "../stores/settings.svelte";
   import { messagingStore } from "../stores/messaging.svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
   interface DeviceDto {
     id: number;
@@ -39,6 +40,40 @@
     }
   }
 
+  let backupReady = $state(false);
+  let importing = $state(false);
+  let importMsg = $state<string | null>(null);
+
+  async function refreshBackupReady() {
+    try {
+      backupReady = await invoke<boolean>("backup_available");
+    } catch {
+      backupReady = false;
+    }
+  }
+
+  async function importBackup() {
+    importMsg = null;
+    let path: string | null = null;
+    try {
+      const sel = await openDialog({ multiple: false, title: "Choisir une archive de transfert" });
+      path = Array.isArray(sel) ? sel[0] ?? null : sel;
+    } catch (e) {
+      importMsg = "Erreur sélecteur : " + String(e);
+      return;
+    }
+    if (!path) return;
+    importing = true;
+    try {
+      const n = await invoke<number>("import_backup", { path });
+      importMsg = `Import : ${n} contact(s).`;
+    } catch (e) {
+      importMsg = "Échec : " + String(e);
+    } finally {
+      importing = false;
+    }
+  }
+
   async function loadDevices() {
     devicesLoading = true;
     devicesError = null;
@@ -65,6 +100,7 @@
   $effect(() => {
     if (open && devices.length === 0 && !devicesLoading) {
       void loadDevices();
+      void refreshBackupReady();
     }
   });
   let signingOut = $state(false);
@@ -167,6 +203,19 @@
           </button>
         {/each}
       </div>
+    </section>
+
+    <section class="group">
+      <h3>Sauvegarde</h3>
+      {#if backupReady}
+        <p class="muted small">Importer l'historique depuis une archive de transfert exportée par votre téléphone (contacts pour l'instant ; messages à venir).</p>
+        <button class="secondary-btn" onclick={importBackup} disabled={importing}>
+          {importing ? "Import…" : "Importer une sauvegarde"}
+        </button>
+        {#if importMsg}<p class="muted small">{importMsg}</p>{/if}
+      {:else}
+        <p class="muted small">Sauvegardes indisponibles (cet appareil n'a pas reçu de clé de sauvegarde au moment de la liaison).</p>
+      {/if}
     </section>
 
     <section class="group">
