@@ -281,44 +281,105 @@ mod recipient_map_tests {
 }
 
 
-/// Extract importable contacts from an encrypted transfer archive — the
-/// Recipient::Contact frames mapped to presage `Contact`s. (Group + ChatItem
-/// extraction follow; they need a real archive to validate = [LIVE-TEST].)
+/// Everything we currently import from a transfer archive.
 #[cfg(feature = "backups")]
-pub async fn extract_contacts(
+pub struct ImportedData {
+    pub contacts: Vec<presage::model::contacts::Contact>,
+    /// (thread, reconstructed Content) pairs ready for `save_message`.
+    pub messages: Vec<(presage::store::Thread, presage::libsignal_service::content::Content)>,
+}
+
+/// Single-pass extraction of contacts + 1:1 text messages from a transfer
+/// archive. Backups are ordered (Account, Recipients, Chats, ChatItems) so
+/// incremental id→aci and chatId→recipientId maps are complete by the time
+/// ChatItems arrive. Group messages + non-text items are skipped for now.
+/// `self_uuid` is our ACI, used to set message direction/destination.
+#[cfg(feature = "backups")]
+pub async fn extract_backup(
     bytes: &[u8],
     key: &libsignal_message_backup::key::MessageBackupKey,
-) -> Result<Vec<presage::model::contacts::Contact>, String> {
+    self_uuid: uuid::Uuid,
+) -> Result<ImportedData, String> {
     use libsignal_message_backup::frame::{CursorFactory, FramesReader};
     use libsignal_message_backup::parse::VarintDelimitedReader;
     use libsignal_message_backup::proto::backup as pb;
+    use presage::libsignal_service::content::{Content, ContentBody, Metadata};
+    use presage::libsignal_service::proto::DataMessage;
+    use presage::libsignal_service::protocol::{Aci, DeviceId, ServiceId};
+    use presage::store::Thread;
     use protobuf3::Message;
+    use std::collections::HashMap;
 
     let frames = FramesReader::new(key, CursorFactory::new(bytes))
         .await
         .map_err(|e| format!("open frames: {e}"))?;
     let mut reader = VarintDelimitedReader::new(frames);
-    // Skip the BackupInfo header.
-    reader
-        .read_next()
-        .await
-        .map_err(|e| format!("read header: {e}"))?
-        .ok_or("empty backup")?;
+    reader.read_next().await.map_err(|e| format!("read header: {e}"))?.ok_or("empty backup")?;
 
     let mut contacts = Vec::new();
-    while let Some(buf) = reader
-        .read_next()
-        .await
-        .map_err(|e| format!("read frame: {e}"))?
-    {
+    let mut messages = Vec::new();
+    // recipient backup-id -> ACI uuid (contacts + self)
+    let mut id_aci: HashMap<u64, uuid::Uuid> = HashMap::new();
+    // chat backup-id -> recipient backup-id
+    let mut chat_recipient: HashMap<u64, u64> = HashMap::new();
+
+    while let Some(buf) = reader.read_next().await.map_err(|e| format!("read frame: {e}"))? {
         let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
-        if let Some(pb::frame::Item::Recipient(r)) = frame.item {
-            if let Some(pb::recipient::Destination::Contact(c)) = r.destination {
-                if let Some(contact) = backup_contact_to_presage(&c) {
-                    contacts.push(contact);
+        match frame.item {
+            Some(pb::frame::Item::Recipient(r)) => {
+                let rid = r.id;
+                match &r.destination {
+                    Some(pb::recipient::Destination::Contact(c)) => {
+                        if let Some(aci) = c.aci.as_ref().and_then(|a| uuid::Uuid::from_slice(a).ok()) {
+                            id_aci.insert(rid, aci);
+                        }
+                        if let Some(contact) = backup_contact_to_presage(c) {
+                            contacts.push(contact);
+                        }
+                    }
+                    Some(pb::recipient::Destination::Self_(_)) => {
+                        id_aci.insert(rid, self_uuid);
+                    }
+                    _ => {}
                 }
             }
+            Some(pb::frame::Item::Chat(c)) => {
+                chat_recipient.insert(c.id, c.recipientId);
+            }
+            Some(pb::frame::Item::ChatItem(item)) => {
+                // 1:1 text messages only for now.
+                let Some(peer_rid) = chat_recipient.get(&item.chatId) else { continue };
+                let Some(&peer_aci) = id_aci.get(peer_rid) else { continue };
+                let author_aci = id_aci.get(&item.authorId).copied().unwrap_or(self_uuid);
+                // Extract text from a StandardMessage.
+                let text = match &item.item {
+                    Some(pb::chat_item::Item::StandardMessage(m)) => {
+                        m.text.as_ref().map(|t| t.body.clone())
+                    }
+                    _ => None,
+                };
+                let Some(body) = text else { continue };
+
+                let thread = Thread::Contact(ServiceId::Aci(Aci::from(peer_aci)));
+                let metadata = Metadata {
+                    sender: ServiceId::Aci(Aci::from(author_aci)),
+                    destination: ServiceId::Aci(Aci::from(if author_aci == self_uuid { peer_aci } else { self_uuid })),
+                    sender_device: DeviceId::new(1).expect("device 1"),
+                    timestamp: item.dateSent,
+                    needs_receipt: false,
+                    unidentified_sender: false,
+                    was_plaintext: true,
+                    server_guid: None,
+                };
+                let dm = DataMessage {
+                    body: Some(body),
+                    timestamp: Some(item.dateSent),
+                    ..Default::default()
+                };
+                messages.push((thread, Content::from_body(ContentBody::DataMessage(dm), metadata)));
+            }
+            _ => {}
         }
     }
-    Ok(contacts)
+    Ok(ImportedData { contacts, messages })
 }
