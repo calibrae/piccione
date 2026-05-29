@@ -101,6 +101,12 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: rust cache
+        # Skip on macOS: the universal (aarch64 + x86_64) build links RingRTC's
+        # prebuilt libwebrtc.a, which ringrtc's build.rs downloads. A warm cache
+        # restores the ringrtc rlib without re-running build.rs, so the native
+        # lib goes missing and the final link fails with undefined _Rust_*
+        # symbols. Cold-build macOS every time; Linux/Windows cache fine.
+        if: matrix.platform.runner != 'macos-14'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
