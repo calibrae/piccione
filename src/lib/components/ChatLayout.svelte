@@ -843,6 +843,11 @@
                       <div class="attachment-placeholder" data-testid="attachment-pending">
                         🖼️ {att.file_name} ({formatSize(att.size)})
                       </div>
+                    {:else if att.mime_type.startsWith("audio/") && att.local_path}
+                      <audio class="attachment-audio" controls preload="metadata" src={convertFileSrc(att.local_path)}></audio>
+                    {:else if att.mime_type.startsWith("video/") && att.local_path}
+                      <!-- svelte-ignore a11y_media_has_caption -->
+                      <video class="attachment-video" controls preload="metadata" src={convertFileSrc(att.local_path)}></video>
                     {:else}
                       <div class="attachment-file" data-testid="attachment-file">
                         <span class="att-ext" aria-hidden="true">{fileExt(att.file_name)}</span>
@@ -998,6 +1003,8 @@
 {/if}
 
 <style>
+  .attachment-audio { width: 240px; max-width: 100%; }
+  .attachment-video { max-width: 320px; border-radius: 8px; }
   .quote-bar-btn {
     border: none;
     border-left: 3px solid var(--accent, #3b82f6);
