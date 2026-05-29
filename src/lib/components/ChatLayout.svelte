@@ -36,6 +36,11 @@
   async function selectConversation(id: string) {
     messagingStore.activeConversationId = id;
     showNewMessage = false;
+    try {
+      inputText = localStorage.getItem(draftKey(id)) ?? "";
+    } catch {
+      inputText = "";
+    }
     // Fire READ receipts for every inbound (not-outgoing) message in the
     // thread so the sender's client shows the blue double-check.
     await messagingStore.loadMessages(id);
@@ -71,6 +76,7 @@
     inputText = "";
     pendingFiles = [];
     replyingTo = null;
+    try { localStorage.removeItem(draftKey(convId)); } catch { /* ignore */ }
 
     // Don't block the UI — fire and forget.
     // Errors surface as toasts via the messaging store.
@@ -130,6 +136,29 @@
       // user can correct the recipient and try again.
     }
   }
+
+  function autosize(e: Event) {
+    const el = e.target as HTMLTextAreaElement;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 140) + "px";
+  }
+
+  function draftKey(id: string): string {
+    return `piccione.draft.${id}`;
+  }
+  // Persist the composer text per conversation so switching threads (or
+  // reloading) doesn't lose a half-typed message.
+  $effect(() => {
+    const id = messagingStore.activeConversationId;
+    if (!id) return;
+    const text = inputText;
+    try {
+      if (text) localStorage.setItem(draftKey(id), text);
+      else localStorage.removeItem(draftKey(id));
+    } catch {
+      /* ignore */
+    }
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -785,13 +814,15 @@
         <button class="attach-btn" onclick={handleAttachFile} title="Joindre un fichier">
           📎
         </button>
-        <input
-          type="text"
-          placeholder="Message…"
+        <textarea
+          class="composer-input"
+          rows="1"
+          placeholder="Message…  (Maj+Entrée = nouvelle ligne)"
           bind:value={inputText}
           onkeydown={handleKeydown}
           onpaste={handlePaste}
-        />
+          oninput={autosize}
+        ></textarea>
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
 
@@ -826,6 +857,15 @@
 {/if}
 
 <style>
+  .composer-input {
+    flex: 1;
+    resize: none;
+    overflow-y: auto;
+    max-height: 140px;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.4;
+  }
   .convo-search {
     padding: 6px 10px;
     border-bottom: 1px solid var(--border, #27272a);
