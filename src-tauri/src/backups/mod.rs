@@ -119,6 +119,9 @@ pub async fn validate_backup(
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct BackupSummary {
     pub recipients: usize,
+    pub contacts: usize,
+    pub groups: usize,
+    pub selfs: usize,
     pub chats: usize,
     pub chat_items: usize,
     pub sticker_packs: usize,
@@ -172,7 +175,16 @@ where
     {
         let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
         match frame.item {
-            Some(pb::frame::Item::Recipient(_)) => sum.recipients += 1,
+            Some(pb::frame::Item::Recipient(r)) => {
+                sum.recipients += 1;
+                use pb::recipient::Destination as D;
+                match r.destination {
+                    Some(D::Contact(_)) => sum.contacts += 1,
+                    Some(D::Group(_)) => sum.groups += 1,
+                    Some(D::Self_(_)) => sum.selfs += 1,
+                    _ => {}
+                }
+            }
             Some(pb::frame::Item::Chat(_)) => sum.chats += 1,
             Some(pb::frame::Item::ChatItem(_)) => sum.chat_items += 1,
             Some(pb::frame::Item::StickerPack(_)) => sum.sticker_packs += 1,
@@ -200,5 +212,9 @@ mod import_tests {
         // non-Recipient frame decode + the oneof match work on real data.
         assert_eq!(sum.recipients, 4, "recipient decode, got {sum:?}");
         assert!(sum.other >= 1, "account frame should decode, got {sum:?}");
+        // The destination oneof match works: the canonical fixture carries a
+        // Self recipient (+ distribution-list/call-link entries we don't
+        // separately tally). Real contacts/groups exercise the same arms.
+        assert!(sum.selfs >= 1, "Self recipient should decode, got {sum:?}");
     }
 }
