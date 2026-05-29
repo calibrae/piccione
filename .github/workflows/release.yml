@@ -52,12 +52,14 @@ jobs:
             # GitHub decommissioned the macos-13 (Intel) runner — universal
             # builds on macos-14 are now the only way to ship for both.
             extra_rust_target: x86_64-apple-darwin
+            build_flags: ""
             artifact_glob: |
               src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
           - name: linux-x64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            build_flags: ""
             artifact_glob: |
               src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
               src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
@@ -65,6 +67,10 @@ jobs:
           - name: windows-x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
+            # Voice OFF on Windows: RingRTC's bundled BoringSSL collides with
+            # SQLCipher's OpenSSL at link time (LNK2005). Ships messaging-only
+            # until that's resolved; macOS/Linux keep voice.
+            build_flags: "-- --no-default-features"
             artifact_glob: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
@@ -95,6 +101,12 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: rust cache
+        # Skip on macOS: the universal (aarch64 + x86_64) build links RingRTC's
+        # prebuilt libwebrtc.a, which ringrtc's build.rs downloads. A warm cache
+        # restores the ringrtc rlib without re-running build.rs, so the native
+        # lib goes missing and the final link fails with undefined _Rust_*
+        # symbols. Cold-build macOS every time; Linux/Windows cache fine.
+        if: matrix.platform.runner != 'macos-14'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
@@ -221,11 +233,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose ${{ matrix.platform.build_flags }}
 
       - name: build (linux/windows)
         if: "!startsWith(matrix.platform.runner, 'macos')"
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose ${{ matrix.platform.build_flags }}
 
       # --- Linux: also produce a tarball of the binary -----------------------
 

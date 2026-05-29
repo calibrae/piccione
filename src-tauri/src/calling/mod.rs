@@ -10,6 +10,8 @@
 //! for frame rendering; group calls need the SFU path. Both deferred.
 
 pub mod manager;
+// signaling.rs maps RingRTC's signaling types, so it only exists with voice.
+#[cfg(feature = "voice")]
 pub mod signaling;
 
 use serde::Serialize;

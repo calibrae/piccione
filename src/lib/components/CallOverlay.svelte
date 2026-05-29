@@ -79,7 +79,7 @@
         </div>
       {:else if call.state === "ended"}
         <p class="call-peer">{peerName()}</p>
-        <p class="call-status">Appel terminé</p>
+        <p class="call-status">{call.reason || "Appel terminé"}</p>
       {/if}
     </div>
   </div>
