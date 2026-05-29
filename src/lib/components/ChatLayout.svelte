@@ -24,6 +24,8 @@
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
   let convoSearch = $state("");
+  let showMsgSearch = $state(false);
+  let msgSearch = $state("");
 
   onMount(async () => {
     await settingsStore.load();
@@ -332,7 +334,12 @@
     (messagingStore.activeConversationId
       ? messagingStore.getMessages(messagingStore.activeConversationId)
       : []
-    ).filter((m) => !messagingStore.deletions.has(String(m.timestamp)))
+    )
+      .filter((m) => !messagingStore.deletions.has(String(m.timestamp)))
+      .filter((m) => {
+        const q = msgSearch.trim().toLowerCase();
+        return !q || (m.body ?? "").toLowerCase().includes(q);
+      })
   );
 
   // Auto-scroll when messages change. messagesContainer is now $state-tracked,
@@ -697,6 +704,14 @@
         {/if}
         <button
           class="icon-btn"
+          onclick={() => { showMsgSearch = !showMsgSearch; if (!showMsgSearch) msgSearch = ""; }}
+          title="Rechercher dans la conversation"
+          aria-label="Rechercher dans la conversation"
+        >
+          🔍
+        </button>
+        <button
+          class="icon-btn"
           onclick={() => (showMedia = true)}
           title="Galerie média"
           aria-label="Galerie média"
@@ -704,6 +719,17 @@
           📎
         </button>
       </div>
+      {#if showMsgSearch}
+        <div class="msg-search">
+          <input
+            type="text"
+            placeholder="Rechercher dans la conversation…"
+            bind:value={msgSearch}
+            aria-label="Rechercher dans la conversation"
+          />
+          {#if msgSearch}<span class="msg-search-count">{activeMessages.length}</span>{/if}
+        </div>
+      {/if}
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
         {#each activeMessages as msg, i}
           {#if isNewDay(i)}
@@ -930,6 +956,27 @@
 {/if}
 
 <style>
+  .msg-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border, #27272a);
+    background: var(--bg-secondary, #16213e);
+  }
+  .msg-search input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--border, #27272a);
+    border-radius: 8px;
+    background: var(--bg-primary, #0f0f1a);
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.85rem;
+  }
+  .msg-search-count {
+    font-size: 0.78rem;
+    color: var(--text-secondary, #a1a1aa);
+  }
   .typing-indicator {
     display: flex;
     gap: 4px;
