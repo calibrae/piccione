@@ -227,11 +227,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} ${{ matrix.platform.build_flags }} --verbose
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose -- ${{ matrix.platform.build_flags }}
 
       - name: build (linux/windows)
         if: "!startsWith(matrix.platform.runner, 'macos')"
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} ${{ matrix.platform.build_flags }} --verbose
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose -- ${{ matrix.platform.build_flags }}
 
       # --- Linux: also produce a tarball of the binary -----------------------
 
