@@ -373,6 +373,25 @@ pub(crate) fn push_data_message_modifiers(
         }));
     }
 
+    if let Some(pm) = &dm.pin_message {
+        if let Some(ts) = pm.target_sent_timestamp {
+            out.push(InboundEvent::Pin(crate::messaging::types::PinEvent {
+                chat_id: chat_id.to_string(),
+                message_id: ts.to_string(),
+                pinned: true,
+            }));
+        }
+    }
+    if let Some(um) = &dm.unpin_message {
+        if let Some(ts) = um.target_sent_timestamp {
+            out.push(InboundEvent::Pin(crate::messaging::types::PinEvent {
+                chat_id: chat_id.to_string(),
+                message_id: ts.to_string(),
+                pinned: false,
+            }));
+        }
+    }
+
     if let Some(pv) = &dm.poll_vote {
         if let Some(ts) = pv.target_sent_timestamp {
             out.push(InboundEvent::PollVote(crate::messaging::types::PollVoteEvent {

@@ -32,6 +32,12 @@ export interface TypingPayload {
   action: TypingActionKind;
 }
 
+export interface PinPayload {
+  chat_id: string;
+  message_id: string;
+  pinned: boolean;
+}
+
 export interface PollVotePayload {
   chat_id: string;
   poll_id: string;
@@ -147,6 +153,8 @@ export function createMessagingStore() {
   let deletions = $state<Set<string>>(new Set());
   // chat_id -> poll_id -> voter_id -> option indexes
   let pollVotes = $state<Map<string, Map<string, Map<string, number[]>>>>(new Map());
+  // chat_id -> set of pinned message timestamps (string)
+  let pinned = $state<Map<string, Set<string>>>(new Map());
 
   // Cleanup handles for IPC listeners. Populated by `initListeners()`,
   // drained by the returned teardown to prevent pile-ups on HMR / app restart.
@@ -222,6 +230,14 @@ export function createMessagingStore() {
         }
         reactions.set(p.chat_id, perChat);
         reactions = new Map(reactions);
+      }),
+      listen<PinPayload>("pin", (event) => {
+        const p = event.payload;
+        const set = pinned.get(p.chat_id) ?? new Set();
+        if (p.pinned) set.add(p.message_id);
+        else set.delete(p.message_id);
+        pinned.set(p.chat_id, set);
+        pinned = new Map(pinned);
       }),
       listen<PollVotePayload>("poll-vote", (event) => {
         const p = event.payload;
@@ -413,6 +429,29 @@ export function createMessagingStore() {
     persistMuted();
   }
 
+  async function setPin(
+    conversationId: string,
+    msgAuthorUuid: string,
+    msgTimestamp: number,
+    pin: boolean
+  ) {
+    try {
+      await invoke("set_pin", {
+        conversationId,
+        targetAuthorUuid: msgAuthorUuid,
+        targetTimestamp: msgTimestamp,
+        pinned: pin,
+      });
+      const set = pinned.get(conversationId) ?? new Set();
+      if (pin) set.add(String(msgTimestamp));
+      else set.delete(String(msgTimestamp));
+      pinned.set(conversationId, set);
+      pinned = new Map(pinned);
+    } catch (e) {
+      console.error("set_pin failed:", e);
+    }
+  }
+
   async function votePoll(
     conversationId: string,
     pollAuthorUuid: string,
@@ -489,6 +528,10 @@ export function createMessagingStore() {
       return pollVotes;
     },
     votePoll,
+    get pinned() {
+      return pinned;
+    },
+    setPin,
     get receipts() {
       return receipts;
     },

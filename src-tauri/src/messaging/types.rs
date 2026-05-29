@@ -205,6 +205,13 @@ pub struct TypingEvent {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PinEvent {
+    pub chat_id: String,
+    pub message_id: String,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PollVoteEvent {
     pub chat_id: String,
     /// target poll message's sent-timestamp.
@@ -252,6 +259,7 @@ pub enum InboundEvent {
     Typing(TypingEvent),
     Reaction(ReactionEvent),
     PollVote(PollVoteEvent),
+    Pin(PinEvent),
     Edited(EditEvent),
     Deleted(DeleteEvent),
 }

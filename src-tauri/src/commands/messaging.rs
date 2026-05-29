@@ -315,3 +315,19 @@ pub async fn vote_poll(
         .vote_poll(&conversation_id, &target_author_uuid, target_timestamp, option_indexes)
         .await
 }
+
+/// Pin or unpin a message.
+#[tauri::command]
+pub async fn set_pin(
+    app: AppHandle,
+    conversation_id: String,
+    target_author_uuid: String,
+    target_timestamp: u64,
+    pinned: bool,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .set_pin(&conversation_id, &target_author_uuid, target_timestamp, pinned)
+        .await
+}

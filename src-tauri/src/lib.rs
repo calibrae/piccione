@@ -49,6 +49,9 @@ fn make_on_event(app: tauri::AppHandle) -> impl Fn(InboundEvent) + Send + Sync +
         InboundEvent::PollVote(payload) => {
             let _ = app.emit("poll-vote", payload);
         }
+        InboundEvent::Pin(payload) => {
+            let _ = app.emit("pin", payload);
+        }
         InboundEvent::Edited(payload) => {
             let _ = app.emit("message-edited", payload);
             // The conversation list summary is derived from the latest
@@ -193,6 +196,7 @@ pub fn run() {
             commands::messaging::set_profile,
             commands::messaging::get_safety_number,
             commands::messaging::vote_poll,
+            commands::messaging::set_pin,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
