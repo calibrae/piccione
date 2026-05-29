@@ -60,6 +60,15 @@ pub struct QuoteInput {
     pub text: String,
 }
 
+/// A link preview attached to a message (DataMessage.preview). Image is
+/// omitted for now — url/title/description render a clean card.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -71,6 +80,8 @@ pub struct ChatMessage {
     /// Set when this message replies to another (DataMessage.quote).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quote: Option<QuotedMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<LinkPreview>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -213,6 +224,7 @@ mod tests {
             attachments: vec![],
             is_outgoing: false,
             quote: None,
+            previews: vec![],
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -353,6 +365,7 @@ mod tests {
                 attachments: vec![],
                 is_outgoing: false,
                 quote: None,
+                previews: vec![],
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

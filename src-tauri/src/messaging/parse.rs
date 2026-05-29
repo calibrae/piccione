@@ -104,6 +104,22 @@ fn extract_quote(dm: &DataMessage) -> Option<crate::messaging::types::QuotedMess
     })
 }
 
+/// Build UI `LinkPreview`s from `DataMessage.preview`. Image previews are
+/// dropped for now; url/title/description render a card.
+fn extract_previews(dm: &DataMessage) -> Vec<crate::messaging::types::LinkPreview> {
+    dm.preview
+        .iter()
+        .filter_map(|p| {
+            let url = p.url.clone()?;
+            Some(crate::messaging::types::LinkPreview {
+                url,
+                title: p.title.clone().unwrap_or_default(),
+                description: p.description.clone().unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -133,6 +149,7 @@ pub(crate) fn content_to_chat_message(
                 attachments,
                 is_outgoing,
                 quote: extract_quote(dm),
+                previews: extract_previews(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -154,6 +171,7 @@ pub(crate) fn content_to_chat_message(
                         attachments,
                         is_outgoing: true,
                         quote: extract_quote(dm),
+                        previews: extract_previews(dm),
                     });
                 }
             }

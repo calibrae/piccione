@@ -31,6 +31,12 @@ export interface QuotedMessage {
   text: string;
 }
 
+export interface LinkPreview {
+  url: string;
+  title: string;
+  description: string;
+}
+
 export interface ChatMessage {
   timestamp: number;
   sender_id: string;
@@ -39,4 +45,5 @@ export interface ChatMessage {
   attachments: AttachmentInfo[];
   is_outgoing: boolean;
   quote?: QuotedMessage;
+  previews?: LinkPreview[];
 }

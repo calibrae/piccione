@@ -566,6 +566,19 @@
                   {/each}
                 </p>
               {/if}
+              {#if msg.previews && msg.previews.length > 0}
+                {#each msg.previews as prev}
+                  <button
+                    class="link-preview"
+                    onclick={() => openExternal(prev.url)}
+                    title={prev.url}
+                  >
+                    {#if prev.title}<span class="lp-title">{prev.title}</span>{/if}
+                    {#if prev.description}<span class="lp-desc">{prev.description}</span>{/if}
+                    <span class="lp-url">{prev.url}</span>
+                  </button>
+                {/each}
+              {/if}
               <span class="msg-time">{formatTime(msg.timestamp)}</span>
               {#if msg.is_outgoing}
                 {@const r = receiptStatus(msg.timestamp, messagingStore.activeConversationId)}
@@ -641,6 +654,31 @@
 {/if}
 
 <style>
+  .link-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    border: 1px solid var(--border, #27272a);
+    border-left: 3px solid var(--accent, #3b82f6);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-top: 4px;
+    background: rgba(127, 127, 127, 0.08);
+    cursor: pointer;
+    max-width: 320px;
+  }
+  .lp-title { font-weight: 600; font-size: 0.85rem; }
+  .lp-desc {
+    font-size: 0.8rem;
+    color: var(--text-secondary, #a1a1aa);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .lp-url { font-size: 0.72rem; color: var(--accent, #3b82f6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .quote-bar {
     display: flex;
     flex-direction: column;
