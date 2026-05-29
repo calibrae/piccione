@@ -56,6 +56,21 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 12 (merged to main)
+
+- ✅ Pinned messages (pin/unpin + pinned bar with jump/unpin)
+
+**33 features merged. Coverage ~12 → ~40 of ~210.** Every DataMessage-level,
+Tier-A, and local-state feature is now shipped. The ONLY remaining work is
+codec/subsystem implementation with no Rust impl in the stack — each a
+multi-week project, not a session:
+
+1. **Backups.proto / Link & Sync** — write the backup codec in Rust (highest value: unlocks history-on-link).
+2. **Group v2 create/management** — zkgroup credentials + group-v2 mutations, partly upstream presage.
+3. **Stories** — StoryMessage subsystem (distribution lists, expiry).
+
+(Negligible long tail: gift-badge display.)
+
 ## Shipped — wave 11 (merged to main)
 
 - ✅ Local block / unblock (hide, suppress, block composer)
