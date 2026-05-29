@@ -22,6 +22,7 @@
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
+  let convoSearch = $state("");
 
   onMount(async () => {
     await settingsStore.load();
@@ -208,6 +209,32 @@
   function clearPickedContact() {
     newRecipient = "";
     showUuidInput = false;
+  }
+
+  let filteredConversations = $derived(
+    messagingStore.conversations.filter((c) => {
+      const q = convoSearch.trim().toLowerCase();
+      return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
+    })
+  );
+
+  function dayLabel(ts: number): string {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((startOf(now) - startOf(d)) / 86400000);
+    if (days === 0) return "Aujourd'hui";
+    if (days === 1) return "Hier";
+    if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+    return d.toLocaleDateString([], { day: "numeric", month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+  }
+  // Index of messages that start a new day (for inserting a separator before).
+  function isNewDay(i: number): boolean {
+    if (i === 0) return true;
+    const prev = activeMessages[i - 1];
+    const cur = activeMessages[i];
+    return new Date(prev.timestamp).toDateString() !== new Date(cur.timestamp).toDateString();
   }
 
   let activeMessages = $derived(
@@ -442,6 +469,9 @@
         </button>
       </div>
     </div>
+    <div class="convo-search">
+      <input type="text" placeholder="Rechercher…" bind:value={convoSearch} aria-label="Rechercher une conversation" />
+    </div>
     <div class="conversations">
       {#if messagingStore.conversations.length === 0}
         <div class="empty-conversations">
@@ -452,7 +482,7 @@
           </div>
         </div>
       {:else}
-        {#each messagingStore.conversations as convo}
+        {#each filteredConversations as convo}
           <button
             class="conversation"
             class:active={messagingStore.activeConversationId === convo.id}
@@ -579,7 +609,10 @@
         </button>
       </div>
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
-        {#each activeMessages as msg}
+        {#each activeMessages as msg, i}
+          {#if isNewDay(i)}
+            <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
+          {/if}
           <div class="message" class:outgoing={msg.is_outgoing}>
             <div class="msg-actions">
               <button
@@ -793,6 +826,33 @@
 {/if}
 
 <style>
+  .convo-search {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border, #27272a);
+  }
+  .convo-search input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border: 1px solid var(--border, #27272a);
+    border-radius: 8px;
+    background: var(--bg-primary, #0f0f1a);
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.85rem;
+  }
+  .day-sep {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0 6px;
+  }
+  .day-sep span {
+    font-size: 0.72rem;
+    color: var(--text-secondary, #a1a1aa);
+    background: rgba(127, 127, 127, 0.14);
+    padding: 2px 10px;
+    border-radius: 10px;
+    text-transform: capitalize;
+  }
   .fmt-bold { font-weight: 700; }
   .fmt-italic { font-style: italic; }
   .fmt-strike { text-decoration: line-through; }
