@@ -78,6 +78,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -178,6 +179,7 @@ pub fn run() {
             commands::messaging::send_message_with_attachments,
             commands::messaging::mark_conversation_read,
             commands::messaging::get_conversation_media,
+            commands::messaging::save_pasted_image,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
