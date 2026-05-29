@@ -654,7 +654,7 @@
             {@render avatarEl(convo.name, convo.avatar_path, "")}
             <div class="convo-info">
               <div class="convo-top">
-                <span class="convo-name">{convo.name}</span>
+                <span class="convo-name">{convo.name}{#if messagingStore.isMuted(convo.id)} <span class="muted-icon" title="Notifications coupées">🔕</span>{/if}</span>
                 <span class="convo-time">{formatTime(convo.last_timestamp)}</span>
               </div>
               <div class="convo-bottom">
@@ -781,6 +781,14 @@
             📞
           </button>
         {/if}
+        <button
+          class="icon-btn"
+          onclick={() => messagingStore.toggleMute(activeConversation.id)}
+          title={messagingStore.isMuted(activeConversation.id) ? "Réactiver les notifications" : "Couper les notifications"}
+          aria-label="Couper les notifications"
+        >
+          {messagingStore.isMuted(activeConversation.id) ? "🔕" : "🔔"}
+        </button>
         <button
           class="icon-btn"
           onclick={() => { showMsgSearch = !showMsgSearch; if (!showMsgSearch) msgSearch = ""; }}
