@@ -130,6 +130,9 @@ pub struct ChatMessage {
     pub body_ranges: Vec<MsgRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poll: Option<PollInfo>,
+    /// Non-text system event (e.g. a group call started). Renders centered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_event: Option<String>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -285,6 +288,7 @@ mod tests {
             previews: vec![],
             body_ranges: vec![],
             poll: None,
+            system_event: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -428,6 +432,7 @@ mod tests {
                 previews: vec![],
                 body_ranges: vec![],
                 poll: None,
+                system_event: None,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

@@ -148,6 +148,14 @@ fn extract_body_ranges(dm: &DataMessage) -> Vec<crate::messaging::types::MsgRang
         .collect()
 }
 
+/// A non-text system event carried by a DataMessage (e.g. group call).
+fn system_event(dm: &DataMessage) -> Option<String> {
+    if dm.group_call_update.is_some() {
+        return Some("group-call".to_string());
+    }
+    None
+}
+
 /// Extract a poll from DataMessage.pollCreate.
 fn extract_poll(dm: &DataMessage) -> Option<crate::messaging::types::PollInfo> {
     let pc = dm.poll_create.as_ref()?;
@@ -176,8 +184,9 @@ pub(crate) fn content_to_chat_message(
             let body = dm.body.clone();
             let attachments = extract_attachments(dm);
             let poll = extract_poll(dm);
-            // Skip messages with no text, attachments, and no poll.
-            if body.is_none() && attachments.is_empty() && poll.is_none() {
+            let system = system_event(dm);
+            // Skip messages with no text, attachments, poll, or system event.
+            if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() {
                 return None;
             }
             Some(ChatMessage {
@@ -191,6 +200,7 @@ pub(crate) fn content_to_chat_message(
                 previews: extract_previews(dm),
                 body_ranges: extract_body_ranges(dm),
                 poll: extract_poll(dm),
+                system_event: system_event(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -202,7 +212,8 @@ pub(crate) fn content_to_chat_message(
                     let body = dm.body.clone();
                     let attachments = extract_attachments(dm);
                     let poll = extract_poll(dm);
-                    if body.is_none() && attachments.is_empty() && poll.is_none() {
+                    let system = system_event(dm);
+                    if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() {
                         return None;
                     }
                     return Some(ChatMessage {
@@ -216,6 +227,7 @@ pub(crate) fn content_to_chat_message(
                         previews: extract_previews(dm),
                         body_ranges: extract_body_ranges(dm),
                         poll: extract_poll(dm),
+                        system_event: system_event(dm),
                     });
                 }
             }

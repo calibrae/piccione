@@ -62,6 +62,7 @@ export interface ChatMessage {
   body_ranges?: MsgRange[];
   edited?: boolean;
   poll?: PollInfo;
+  system_event?: string;
 }
 
 export interface SearchHit {
