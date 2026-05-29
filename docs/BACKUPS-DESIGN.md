@@ -61,8 +61,10 @@ the relevant rows.
 - **Messaging-thread query** (reuse the established oneshot pattern):
   `SendRequest::RequestTransferArchive` and an import routine that runs on the
   presage thread (store writes are `!Send`).
-- **AEP access:** `mgr.registration_data()` — confirm the AEP is persisted at
-  link; if only the master key is kept, add AEP persistence in the link path.
+- **AEP persistence (prerequisite):** patch calibrae/presage to add an
+  `account_entropy_pool` field to `RegistrationData` and populate it in
+  `manager/linking.rs` (it's already in scope there at line 130, currently
+  consumed and dropped). Without this the `BackupKey` cannot be derived.
 - **Import writer:** map `Frame`→presage `save_message`/`save_contact`/
   `save_group`. The trickiest part: faithfully rebuilding `ChatItem` →
   `Content` so `get_messages` renders them identically to live messages.
@@ -70,8 +72,14 @@ the relevant rows.
 
 ## Risks / unknowns to resolve in the build session
 
-1. **AEP availability** — is it in presage's persisted `registration_data`, or
-   do we need to capture it during provisioning? (Blocking — verify first.)
+1. **AEP availability — RESOLVED (blocking, needs upstream/fork work).**
+   presage *receives* `accountEntropyPool` at link (`manager/linking.rs:130`)
+   but only uses it to derive the master key, then **drops it** —
+   `RegistrationData` has no AEP field. Because AEP→master_key is one-way, the
+   stored master key cannot reconstruct the `BackupKey`. **Therefore Link &
+   Sync requires patching presage to persist the AEP in `RegistrationData` at
+   link time** (a calibrae/presage fork change + ideally an upstream PR). This
+   is the first concrete work item, and it gates everything else.
 2. **Transfer-archive sync protobufs** — confirm the exact `SyncMessage`
    request/response fields against Signal-Android/Desktop (the proto may need
    regenerating in libsignal-service-rs).
@@ -89,6 +97,8 @@ A first.
 
 ## Status
 
-Design only. No code. Next: a spike that (1) confirms AEP persistence, (2)
-adds the two libsignal crates, (3) reads a test backup file with `BackupReader`
-and logs the frames — before touching the store-import path.
+Design + first unknown resolved. AEP persistence confirmed MISSING in presage
+(must be added — see risk #1). Next spike: (1) fork-patch presage to persist
+the AEP, (2) add `libsignal-message-backup` + `libsignal-account-keys` deps,
+(3) read a test backup file with `BackupReader` and log frames — before
+touching the store-import path.
