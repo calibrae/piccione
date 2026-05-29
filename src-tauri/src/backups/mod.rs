@@ -108,3 +108,61 @@ pub async fn validate_backup(
         .map_err(|e| format!("backup validation failed: {e}"))?;
     Ok(result.found_unknown_fields.len())
 }
+
+
+/// Per-frame-type counts from a transfer archive — the read-loop foundation
+/// the store-import builds on. Walks the decrypted, length-delimited frame
+/// stream (`FramesReader` → `VarintDelimitedReader` → `proto::backup::Frame`)
+/// after the `BackupInfo` header. A real `Frame`→presage-store mapping
+/// replaces the counters; the loop structure is the same.
+#[cfg(feature = "backups")]
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct BackupSummary {
+    pub recipients: usize,
+    pub chats: usize,
+    pub chat_items: usize,
+    pub sticker_packs: usize,
+    pub other: usize,
+}
+
+#[cfg(feature = "backups")]
+pub async fn summarize_backup(
+    bytes: &[u8],
+    key: &libsignal_message_backup::key::MessageBackupKey,
+) -> Result<BackupSummary, String> {
+    use libsignal_message_backup::frame::{CursorFactory, FramesReader};
+    use libsignal_message_backup::parse::VarintDelimitedReader;
+    use libsignal_message_backup::proto::backup as pb;
+    use protobuf3::Message;
+
+    let frames = FramesReader::new(key, CursorFactory::new(bytes))
+        .await
+        .map_err(|e| format!("open frames: {e}"))?;
+    let mut reader = VarintDelimitedReader::new(frames);
+
+    // First length-delimited message is the BackupInfo header.
+    let header = reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read header: {e}"))?
+        .ok_or("empty backup")?;
+    let _info = pb::BackupInfo::parse_from_bytes(&header)
+        .map_err(|e| format!("decode BackupInfo: {e}"))?;
+
+    let mut sum = BackupSummary::default();
+    while let Some(buf) = reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read frame: {e}"))?
+    {
+        let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
+        match frame.item {
+            Some(pb::frame::Item::Recipient(_)) => sum.recipients += 1,
+            Some(pb::frame::Item::Chat(_)) => sum.chats += 1,
+            Some(pb::frame::Item::ChatItem(_)) => sum.chat_items += 1,
+            Some(pb::frame::Item::StickerPack(_)) => sum.sticker_packs += 1,
+            _ => sum.other += 1,
+        }
+    }
+    Ok(sum)
+}

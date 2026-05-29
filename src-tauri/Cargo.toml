@@ -70,7 +70,10 @@ mimalloc = { version = "0.1", default-features = false }
 tauri-plugin-opener = "2"
 # Message backups / Link & Sync codec (Tier B). Same libsignal tag as
 # libsignal-service (v0.91.0) so account-keys/protocol types unify.
-libsignal-message-backup = { git = "https://github.com/signalapp/libsignal", tag = "v0.91.0", optional = true }
+libsignal-message-backup = { git = "https://github.com/signalapp/libsignal", tag = "v0.91.0", features = ["test-util"], optional = true }
+# message-backup's generated protos use rust-protobuf 3.x (not prost); alias it
+# so we can parse backup frames.
+protobuf3 = { package = "protobuf", version = "3", optional = true }
 tauri-plugin-notification = "2"
 
 [dev-dependencies]
@@ -81,7 +84,7 @@ default = ["voice", "backups"]
 # Voice calls via RingRTC. Off on Windows (see the ringrtc dep comment).
 voice = ["dep:ringrtc", "dep:log"]
 # Message backups / Link & Sync history import.
-backups = ["dep:libsignal-message-backup"]
+backups = ["dep:libsignal-message-backup", "dep:protobuf3"]
 test = ["tauri/test"]
 
 [patch.crates-io]

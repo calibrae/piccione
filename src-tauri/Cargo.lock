@@ -4216,6 +4216,7 @@ dependencies = [
  "presage",
  "presage-store-sqlite",
  "prost 0.13.5",
+ "protobuf 3.7.2",
  "qrcode",
  "rand 0.8.5",
  "ringrtc",
