@@ -338,3 +338,22 @@ pub async fn backup_available(app: AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
     Ok(state.messaging.backup_available().await)
 }
+
+/// Decrypt + summarize an encrypted transfer archive before import.
+#[cfg(feature = "backups")]
+#[tauri::command]
+pub async fn preview_backup(
+    app: AppHandle,
+    path: String,
+) -> Result<crate::backups::BackupSummary, String> {
+    let state = app.state::<AppState>();
+    state.messaging.preview_backup(&path).await
+}
+
+/// Stub when the `backups` feature is off (e.g. Windows) so the command is
+/// always registered.
+#[cfg(not(feature = "backups"))]
+#[tauri::command]
+pub async fn preview_backup(_app: AppHandle, _path: String) -> Result<(), String> {
+    Err("message backups are not available in this build".into())
+}

@@ -197,6 +197,7 @@ pub fn run() {
             commands::messaging::set_profile,
             commands::messaging::get_safety_number,
             commands::messaging::backup_available,
+            commands::messaging::preview_backup,
             commands::messaging::vote_poll,
             commands::messaging::set_pin,
             commands::account::sign_out,
