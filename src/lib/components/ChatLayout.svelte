@@ -284,6 +284,38 @@
     messagingStore.sendReaction(cid, msg.sender_id, msg.timestamp, emoji, remove);
   }
 
+  interface BodySeg { text: string; styles: string[]; mention: string | null; }
+  function resolveMention(uuid: string): string {
+    const c = messagingStore.conversations.find((x) => x.id === uuid && !x.is_group);
+    return c ? c.name : "utilisateur";
+  }
+  // Build display segments from a body + its bodyRanges. start/length are
+  // UTF-16 offsets, matching JS string indexing.
+  function bodySegments(text: string, ranges: import("../types").MsgRange[]): BodySeg[] {
+    const bounds = new Set<number>([0, text.length]);
+    for (const r of ranges) {
+      bounds.add(Math.min(r.start, text.length));
+      bounds.add(Math.min(r.start + r.length, text.length));
+    }
+    const points = [...bounds].filter((n) => n >= 0 && n <= text.length).sort((a, b) => a - b);
+    const segs: BodySeg[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      if (b <= a) continue;
+      const styles: string[] = [];
+      let mention: string | null = null;
+      for (const r of ranges) {
+        if (r.start <= a && r.start + r.length >= b) {
+          if (r.style) styles.push(r.style);
+          if (r.mention_uuid) mention = r.mention_uuid;
+        }
+      }
+      segs.push({ text: text.slice(a, b), styles, mention });
+    }
+    return segs;
+  }
+
   async function copyMessage(msg: ChatMessage) {
     if (!msg.body) return;
     try {
@@ -637,17 +669,29 @@
               {/if}
               {#if msg.body}
                 <p>
-                  {#each linkify(msg.body) as seg}
-                    {#if seg.href}
-                      <a
-                        href={seg.href}
-                        class="msg-link"
-                        onclick={(e) => {
-                          e.preventDefault();
-                          openExternal(seg.href!);
-                        }}>{seg.text}</a>
-                    {:else}{seg.text}{/if}
-                  {/each}
+                  {#if msg.body_ranges && msg.body_ranges.length > 0}
+                    {#each bodySegments(msg.body, msg.body_ranges) as seg}
+                      {#if seg.mention}<span class="mention">@{resolveMention(seg.mention)}</span>{:else}<span
+                          class:fmt-bold={seg.styles.includes("bold")}
+                          class:fmt-italic={seg.styles.includes("italic")}
+                          class:fmt-strike={seg.styles.includes("strikethrough")}
+                          class:fmt-mono={seg.styles.includes("monospace")}
+                          class:fmt-spoiler={seg.styles.includes("spoiler")}
+                        >{seg.text}</span>{/if}
+                    {/each}
+                  {:else}
+                    {#each linkify(msg.body) as seg}
+                      {#if seg.href}
+                        <a
+                          href={seg.href}
+                          class="msg-link"
+                          onclick={(e) => {
+                            e.preventDefault();
+                            openExternal(seg.href!);
+                          }}>{seg.text}</a>
+                      {:else}{seg.text}{/if}
+                    {/each}
+                  {/if}
                 </p>
               {/if}
               {#if msg.previews && msg.previews.length > 0}
@@ -749,6 +793,22 @@
 {/if}
 
 <style>
+  .fmt-bold { font-weight: 700; }
+  .fmt-italic { font-style: italic; }
+  .fmt-strike { text-decoration: line-through; }
+  .fmt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  .fmt-spoiler {
+    background: var(--text-primary, #e4e4e7);
+    color: transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.1s, background 0.1s;
+  }
+  .fmt-spoiler:hover { background: rgba(127,127,127,0.25); color: inherit; }
+  .mention {
+    color: var(--accent, #3b82f6);
+    font-weight: 600;
+  }
   .link-preview {
     display: flex;
     flex-direction: column;

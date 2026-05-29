@@ -120,6 +120,34 @@ fn extract_previews(dm: &DataMessage) -> Vec<crate::messaging::types::LinkPrevie
         .collect()
 }
 
+/// Map `DataMessage.bodyRanges` to UI `MsgRange`s (styles + mentions).
+fn extract_body_ranges(dm: &DataMessage) -> Vec<crate::messaging::types::MsgRange> {
+    use presage::libsignal_service::proto::body_range::{AssociatedValue, Style};
+    dm.body_ranges
+        .iter()
+        .filter_map(|r| {
+            let start = r.start?;
+            let length = r.length?;
+            let (style, mention_uuid) = match &r.associated_value {
+                Some(AssociatedValue::Style(s)) => {
+                    let name = match Style::try_from(*s).unwrap_or(Style::None) {
+                        Style::Bold => "bold",
+                        Style::Italic => "italic",
+                        Style::Spoiler => "spoiler",
+                        Style::Strikethrough => "strikethrough",
+                        Style::Monospace => "monospace",
+                        Style::None => return None,
+                    };
+                    (Some(name.to_string()), None)
+                }
+                Some(AssociatedValue::MentionAci(aci)) => (None, Some(aci.clone())),
+                _ => return None,
+            };
+            Some(crate::messaging::types::MsgRange { start, length, style, mention_uuid })
+        })
+        .collect()
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -150,6 +178,7 @@ pub(crate) fn content_to_chat_message(
                 is_outgoing,
                 quote: extract_quote(dm),
                 previews: extract_previews(dm),
+                body_ranges: extract_body_ranges(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -172,6 +201,7 @@ pub(crate) fn content_to_chat_message(
                         is_outgoing: true,
                         quote: extract_quote(dm),
                         previews: extract_previews(dm),
+                        body_ranges: extract_body_ranges(dm),
                     });
                 }
             }

@@ -37,6 +37,13 @@ export interface LinkPreview {
   description: string;
 }
 
+export interface MsgRange {
+  start: number;
+  length: number;
+  style?: string;
+  mention_uuid?: string;
+}
+
 export interface ChatMessage {
   timestamp: number;
   sender_id: string;
@@ -46,4 +53,5 @@ export interface ChatMessage {
   is_outgoing: boolean;
   quote?: QuotedMessage;
   previews?: LinkPreview[];
+  body_ranges?: MsgRange[];
 }

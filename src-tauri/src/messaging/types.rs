@@ -69,6 +69,19 @@ pub struct LinkPreview {
     pub description: String,
 }
 
+/// A formatting/mention span over a message body (DataMessage.bodyRanges).
+/// `start`/`length` are UTF-16 code-unit offsets (so the frontend can apply
+/// them directly to a JS string). Exactly one of `style`/`mention_uuid` is set.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MsgRange {
+    pub start: u32,
+    pub length: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_uuid: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -82,6 +95,8 @@ pub struct ChatMessage {
     pub quote: Option<QuotedMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub previews: Vec<LinkPreview>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub body_ranges: Vec<MsgRange>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -225,6 +240,7 @@ mod tests {
             is_outgoing: false,
             quote: None,
             previews: vec![],
+            body_ranges: vec![],
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -366,6 +382,7 @@ mod tests {
                 is_outgoing: false,
                 quote: None,
                 previews: vec![],
+                body_ranges: vec![],
             },
         };
         let json = serde_json::to_value(&ev).unwrap();
