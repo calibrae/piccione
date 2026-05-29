@@ -32,13 +32,13 @@ the wire. Highest visual-parity-per-effort.
 | **View-once media** | `isViewOnce` | S |
 | **Mentions + rich text** | `bodyRanges` (bold/italic/strike/spoiler/mention render) | M |
 | **Contact cards** | `DataMessage.contact` | S |
-| **Unread counts** | `Conversation.unread_count` (mark-read already wired) | S |
+| ✅ **Unread counts** | `Conversation.unread_count` (mark-read already wired) | S |
 | **Full-text search** | SQLite FTS5 over the messages table | M |
 | **Stickers (receive + render)** | `sticker_metadata`, `install_sticker_pack` | M |
-| **Linked-device management** | `devices`, `unlink_secondary` | S |
+| ✅ **Linked-device management** | `devices`, `unlink_secondary` | S |
 | **Safety numbers** | libsignal fingerprint module | M |
 | **Block / unblock** | presage block API + storage-service | S |
-| **System notifications + dock badge** | `tauri-plugin-notification` | M |
+| ✅ **System notifications + dock badge** | `tauri-plugin-notification` | M |
 | **Disappearing/expire sweep** | local timer + DB delete | S |
 
 ## Tier B — protocol work or presage gap (real engineering)
@@ -55,6 +55,12 @@ the wire. Highest visual-parity-per-effort.
 
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
+
+## Shipped — wave 4 (merged to main)
+
+- ✅ Dock/taskbar unread badge
+- ✅ Sender names above incoming group messages
+- ✅ Typing indicators (send + render, 1:1)
 
 ## Shipped — wave 3 (branch parity-push, PR #3)
 
