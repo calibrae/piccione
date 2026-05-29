@@ -16,6 +16,29 @@
   let devicesLoading = $state(false);
   let devicesError = $state<string | null>(null);
 
+  let profileGiven = $state("");
+  let profileFamily = $state("");
+  let profileAbout = $state("");
+  let profileSaving = $state(false);
+  let profileMsg = $state<string | null>(null);
+
+  async function saveProfile() {
+    profileSaving = true;
+    profileMsg = null;
+    try {
+      await invoke("set_profile", {
+        givenName: profileGiven.trim(),
+        familyName: profileFamily.trim() || null,
+        about: profileAbout.trim() || null,
+      });
+      profileMsg = "Profil mis à jour";
+    } catch (e) {
+      profileMsg = "Erreur : " + String(e);
+    } finally {
+      profileSaving = false;
+    }
+  }
+
   async function loadDevices() {
     devicesLoading = true;
     devicesError = null;
@@ -147,6 +170,19 @@
     </section>
 
     <section class="group">
+      <h3>Profil</h3>
+      <div class="profile-fields">
+        <input type="text" placeholder="Prénom" bind:value={profileGiven} maxlength="64" />
+        <input type="text" placeholder="Nom (facultatif)" bind:value={profileFamily} maxlength="64" />
+        <input type="text" placeholder="À propos (facultatif)" bind:value={profileAbout} maxlength="140" />
+        <button class="primary-btn" onclick={saveProfile} disabled={profileSaving || !profileGiven.trim()}>
+          {profileSaving ? "Enregistrement…" : "Enregistrer le profil"}
+        </button>
+        {#if profileMsg}<p class="muted small">{profileMsg}</p>{/if}
+      </div>
+    </section>
+
+    <section class="group">
       <h3>Appareils liés</h3>
       {#if devicesLoading}
         <p class="muted">Chargement…</p>
@@ -202,6 +238,15 @@
 {/if}
 
 <style>
+  .profile-fields { display: flex; flex-direction: column; gap: 8px; }
+  .profile-fields input {
+    padding: 8px 10px;
+    border: 1px solid var(--border, #27272a);
+    border-radius: 8px;
+    background: var(--bg-primary, #0f0f1a);
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.88rem;
+  }
   .device-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
   .device { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border, #27272a); border-radius: 8px; }
   .device-info { display: flex; flex-direction: column; gap: 2px; }
