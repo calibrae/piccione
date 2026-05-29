@@ -888,7 +888,7 @@
                   </button>
                 {/each}
               {/if}
-              <span class="msg-time" title={new Date(msg.timestamp).toLocaleString()}>{formatTime(msg.timestamp)}</span>
+              <span class="msg-time" title={new Date(msg.timestamp).toLocaleString()}>{#if msg.edited}<span class="edited-tag">modifié · </span>{/if}{formatTime(msg.timestamp)}</span>
               {#if msg.is_outgoing}
                 {@const r = receiptStatus(msg.timestamp, messagingStore.activeConversationId)}
                 <span class="receipt receipt-{r}" title={r} aria-label={r}>
@@ -982,6 +982,7 @@
 {/if}
 
 <style>
+  .edited-tag { font-style: italic; opacity: 0.8; }
   .jumbomoji {
     font-size: 2.6rem;
     line-height: 1.1;

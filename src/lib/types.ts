@@ -54,4 +54,5 @@ export interface ChatMessage {
   quote?: QuotedMessage;
   previews?: LinkPreview[];
   body_ranges?: MsgRange[];
+  edited?: boolean;
 }
