@@ -53,8 +53,14 @@ clap = { version = "4", features = ["derive"] }
 # libwebrtc.a from build-artifacts.signal.org instead of compiling
 # Chromium — verified working on macOS/Linux/Windows (Phase-0 spike).
 # Needs PREBUILT_WEBRTC=1 in the build env (see CI + README).
-ringrtc = { git = "https://github.com/signalapp/ringrtc", tag = "v2.69.0", features = ["prebuilt_webrtc"] }
-log = "0.4"  # ringrtc::webrtc::logging::set_logger wants a log::LevelFilter
+# Optional + gated behind the `voice` feature: RingRTC statically bundles a
+# full BoringSSL, whose crypto symbols (EVP_*, ASN1_*, …) collide at link
+# time with the OpenSSL that SQLCipher links on Windows MSVC (LNK2005). Two
+# ABI-incompatible crypto libs can't coexist, so the Windows build ships
+# WITHOUT voice (--no-default-features) until that's solved properly.
+# macOS/Linux build with voice on (the default).
+ringrtc = { git = "https://github.com/signalapp/ringrtc", tag = "v2.69.0", features = ["prebuilt_webrtc"], optional = true }
+log = { version = "0.4", optional = true }  # ringrtc::webrtc::logging::set_logger wants a log::LevelFilter
 
 # mimalloc as global allocator. macOS default malloc holds onto freed pages
 # very aggressively, inflating RSS after one-shot allocations like the
@@ -67,6 +73,9 @@ tauri-plugin-opener = "2"
 mockall = "0.13"
 
 [features]
+default = ["voice"]
+# Voice calls via RingRTC. Off on Windows (see the ringrtc dep comment).
+voice = ["dep:ringrtc", "dep:log"]
 test = ["tauri/test"]
 
 [patch.crates-io]

@@ -89,6 +89,9 @@ jobs:
       - name: test
         working-directory: src-tauri
         run: cargo test --lib
+      - name: check voice-off build (windows config)
+        working-directory: src-tauri
+        run: cargo check --lib --no-default-features
 
   frontend:
     name: frontend

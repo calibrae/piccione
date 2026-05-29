@@ -17,25 +17,41 @@
 //! `[LIVE-TEST]` markers flag everything that compiles + follows RingRTC's
 //! own `bin/direct.rs` example but can only be confirmed by a real call.
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use super::{CallEvent, CallState};
+
+// Everything below is the RingRTC engine — only compiled with the `voice`
+// feature (off on Windows, where RingRTC's BoringSSL collides with OpenSSL).
+#[cfg(feature = "voice")]
+use std::collections::HashSet;
+#[cfg(feature = "voice")]
 use ringrtc::common::{CallConfig, CallId, CallMediaType, DeviceId, Result as RingResult};
+#[cfg(feature = "voice")]
 use ringrtc::core::call_manager::CallManager;
+#[cfg(feature = "voice")]
 use ringrtc::core::{group_call, signaling};
+#[cfg(feature = "voice")]
 use ringrtc::lite::http;
+#[cfg(feature = "voice")]
 use ringrtc::lite::sfu::{GroupMember, UserId};
+#[cfg(feature = "voice")]
 use ringrtc::native::{
     CallState as RingCallState, CallStateHandler, GroupUpdate, GroupUpdateHandler,
     NativeCallContext, NativePlatform, PeerId, SignalingSender,
 };
+#[cfg(feature = "voice")]
 use ringrtc::webrtc::peer_connection_factory::{self as pcf, IceServer, PeerConnectionFactory};
+#[cfg(feature = "voice")]
 use ringrtc::webrtc::peer_connection_observer::NetworkRoute;
-use tokio::sync::mpsc;
+#[cfg(feature = "voice")]
 use tracing::{error, info, warn};
-use uuid::Uuid;
-
-use super::{CallDirection, CallEvent, CallState};
+#[cfg(feature = "voice")]
+use super::CallDirection;
+#[cfg(feature = "voice")]
 use crate::calling::signaling as sig_map;
 
 /// What the call thread can be asked to do.
@@ -141,6 +157,7 @@ type SendFn =
     Arc<dyn Fn(Uuid, presage::libsignal_service::proto::CallMessage) + Send + Sync>;
 
 /// Live state owned exclusively by the call thread.
+#[cfg(feature = "voice")]
 struct CallThread {
     self_device_id: Arc<std::sync::atomic::AtomicU32>,
     call_manager: CallManager<NativePlatform>,
@@ -150,6 +167,7 @@ struct CallThread {
     active: Option<ActiveCall>,
 }
 
+#[cfg(feature = "voice")]
 struct ActiveCall {
     call_id: CallId,
     peer_uuid: Uuid,
@@ -157,6 +175,7 @@ struct ActiveCall {
     direction: CallDirection,
 }
 
+#[cfg(feature = "voice")]
 fn call_thread_main(
     self_device_id: Arc<std::sync::atomic::AtomicU32>,
     mut cmd_rx: mpsc::UnboundedReceiver<CallCommand>,
@@ -189,6 +208,38 @@ fn call_thread_main(
     });
 }
 
+/// Stub call thread for builds without the `voice` feature (Windows, where
+/// RingRTC's bundled BoringSSL collides with SQLCipher's OpenSSL at link
+/// time). Drains commands; any attempt to start or accept a call resolves
+/// immediately to `Ended` so the UI shows a clear message instead of hanging.
+#[cfg(not(feature = "voice"))]
+fn call_thread_main(
+    _self_device_id: Arc<std::sync::atomic::AtomicU32>,
+    mut cmd_rx: mpsc::UnboundedReceiver<CallCommand>,
+    state: Arc<Mutex<CallState>>,
+    emit_event: EmitFn,
+    _send_call_message: SendFn,
+) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("calling runtime");
+    rt.block_on(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            if matches!(cmd, CallCommand::StartCall { .. } | CallCommand::Accept) {
+                let ended = CallState::Ended {
+                    reason: "voice calls are not available in this build".to_string(),
+                };
+                *state.lock().expect("call state lock") = ended.clone();
+                emit_event(CallEvent::StateChanged(ended));
+                *state.lock().expect("call state lock") = CallState::Idle;
+            }
+            // Decline / Hangup / inbound CallMessages: nothing to do.
+        }
+    });
+}
+
+#[cfg(feature = "voice")]
 impl CallThread {
     fn new(
         self_device_id: Arc<std::sync::atomic::AtomicU32>,
@@ -408,12 +459,14 @@ impl CallThread {
 /// One object, three RingRTC callback traits + the HTTP delegate. Cloned
 /// into `NativePlatform` and `DelegatingClient` at setup.
 #[derive(Clone)]
+#[cfg(feature = "voice")]
 struct Bridge {
     state: Arc<Mutex<CallState>>,
     emit_event: EmitFn,
     send_call_message: SendFn,
 }
 
+#[cfg(feature = "voice")]
 impl Bridge {
     fn peer(&self) -> Option<(Uuid, String)> {
         match &*self.state.lock().expect("call state lock") {
@@ -427,6 +480,7 @@ impl Bridge {
     }
 }
 
+#[cfg(feature = "voice")]
 impl SignalingSender for Bridge {
     fn send_signaling(
         &self,
@@ -473,6 +527,7 @@ impl SignalingSender for Bridge {
     }
 }
 
+#[cfg(feature = "voice")]
 impl CallStateHandler for Bridge {
     fn handle_call_state(
         &self,
@@ -539,6 +594,7 @@ impl CallStateHandler for Bridge {
     }
 }
 
+#[cfg(feature = "voice")]
 impl GroupUpdateHandler for Bridge {
     fn handle_group_update(&self, _update: GroupUpdate) -> RingResult<()> {
         // Group calls aren't wired for voice-first. No-op.
@@ -546,6 +602,7 @@ impl GroupUpdateHandler for Bridge {
     }
 }
 
+#[cfg(feature = "voice")]
 impl http::Delegate for Bridge {
     fn send_request(&self, _request_id: u32, _request: http::Request) {
         // [LIVE-TEST] RingRTC uses HTTP for TURN credentials. We currently
@@ -559,8 +616,10 @@ impl http::Delegate for Bridge {
 /// Voice-only: RingRTC's `NativeCallContext` requires an incoming video
 /// sink. We never negotiate video, so frames should never arrive — this
 /// just discards anything that does.
+#[cfg(feature = "voice")]
 struct DiscardVideoSink;
 
+#[cfg(feature = "voice")]
 impl ringrtc::webrtc::media::VideoSink for DiscardVideoSink {
     fn on_video_frame(
         &self,
