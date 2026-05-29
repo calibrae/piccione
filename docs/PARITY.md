@@ -56,6 +56,13 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 7 (merged to main)
+
+- ✅ Profile fetch for unresolved 1:1 names (retrieve_profile_by_uuid)
+- ✅ Voice-message recording (MediaRecorder → attachment) + macOS mic entitlement
+
+**Session total: 26 Tier-A features merged. Coverage ~12 → ~34 of ~210.**
+
 ## Shipped — wave 6 (merged to main)
 
 - ✅ Global message search across all conversations (read-only backend)
