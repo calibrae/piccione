@@ -56,3 +56,12 @@ export interface ChatMessage {
   body_ranges?: MsgRange[];
   edited?: boolean;
 }
+
+export interface SearchHit {
+  conversation_id: string;
+  conversation_name: string;
+  is_group: boolean;
+  timestamp: number;
+  sender_name: string;
+  snippet: string;
+}

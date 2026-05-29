@@ -258,3 +258,13 @@ pub async fn send_typing(
     state.messaging.send_typing(&conversation_id, started).await;
     Ok(())
 }
+
+/// Search message bodies across all conversations (read-only).
+#[tauri::command]
+pub async fn search_messages(
+    app: AppHandle,
+    query: String,
+) -> Result<Vec<crate::messaging::types::SearchHit>, String> {
+    let state = app.state::<AppState>();
+    state.messaging.search_messages(&query, 200).await
+}

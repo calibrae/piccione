@@ -185,6 +185,7 @@ pub fn run() {
             commands::messaging::delete_for_everyone,
             commands::messaging::list_devices,
             commands::messaging::send_typing,
+            commands::messaging::search_messages,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
