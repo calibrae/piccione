@@ -37,7 +37,7 @@ describe("messagingStore.initListeners", () => {
   it("registers exactly one listener per event", async () => {
     const store = createMessagingStore();
     await store.initListeners();
-    // 8 IPC events: new-message, conversations-updated, read-receipt,
+    // 9 IPC events: new-message, conversations-updated, read-receipt,
     // typing-indicator, reaction, poll-vote, message-edited, message-deleted.
     const expected = new Set([
       "new-message",
@@ -46,12 +46,13 @@ describe("messagingStore.initListeners", () => {
       "typing-indicator",
       "reaction",
       "poll-vote",
+      "pin",
       "message-edited",
       "message-deleted",
     ]);
     expect(new Set(listenCalls)).toEqual(expected);
-    expect(listenCalls.length).toBe(8);
-    expect(store._listenerCount).toBe(8);
+    expect(listenCalls.length).toBe(9);
+    expect(store._listenerCount).toBe(9);
   });
 
   it("is idempotent: a second initListeners call does not double-subscribe", async () => {
@@ -60,15 +61,15 @@ describe("messagingStore.initListeners", () => {
     const firstCount = listenCalls.length;
     await store.initListeners();
     expect(listenCalls.length).toBe(firstCount);
-    expect(store._listenerCount).toBe(8);
+    expect(store._listenerCount).toBe(9);
   });
 
   it("returns a teardown that unsubscribes every listener", async () => {
     const store = createMessagingStore();
     const teardown = await store.initListeners();
-    expect(store._listenerCount).toBe(8);
+    expect(store._listenerCount).toBe(9);
     await teardown();
-    expect(unlistenCalls.length).toBe(8);
+    expect(unlistenCalls.length).toBe(9);
     expect(store._listenerCount).toBe(0);
   });
 
@@ -78,8 +79,8 @@ describe("messagingStore.initListeners", () => {
     await teardown();
     listenCalls.length = 0;
     await store.initListeners();
-    expect(listenCalls.length).toBe(8);
-    expect(store._listenerCount).toBe(8);
+    expect(listenCalls.length).toBe(9);
+    expect(store._listenerCount).toBe(9);
   });
 });
 

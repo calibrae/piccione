@@ -570,6 +570,19 @@
       console.error("copy failed:", e);
     }
   }
+  function isPinned(msg: ChatMessage): boolean {
+    const cid = messagingStore.activeConversationId;
+    return !!cid && !!messagingStore.pinned.get(cid)?.has(String(msg.timestamp));
+  }
+  function togglePin(msg: ChatMessage) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return;
+    messagingStore.setPin(cid, msg.sender_id, msg.timestamp, !isPinned(msg));
+  }
+  let pinnedMessages = $derived(
+    activeMessages.filter((m) => isPinned(m))
+  );
+
   function deleteMessage(msg: ChatMessage) {
     const cid = messagingStore.activeConversationId;
     if (!cid) return;
@@ -941,6 +954,19 @@
           {#if msgSearch}<span class="msg-search-count">{activeMessages.length}</span>{/if}
         </div>
       {/if}
+      {#if pinnedMessages.length > 0}
+        <div class="pinned-bar">
+          {#each pinnedMessages as pm}
+            <div class="pinned-item">
+              <button class="pinned-jump" onclick={() => jumpToMessage(pm.timestamp)} title="Aller au message épinglé">
+                <span class="pinned-icon">📌</span>
+                <span class="pinned-text">{pm.body ?? (pm.poll ? "📊 " + pm.poll.question : "📎 pièce jointe")}</span>
+              </button>
+              <button class="pinned-x" onclick={() => togglePin(pm)} aria-label="Détacher">&times;</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer} onscroll={onMessagesScroll}>
         {#each activeMessages as msg, i}
           {#if isNewDay(i)}
@@ -976,6 +1002,12 @@
                   onclick={() => copyMessage(msg)}
                 >⧉</button>
               {/if}
+              <button
+                class="reply-action"
+                title={isPinned(msg) ? "Détacher" : "Épingler"}
+                aria-label="Épingler"
+                onclick={() => togglePin(msg)}
+              >📌</button>
               {#if msg.is_outgoing}
                 <button
                   class="reply-action"

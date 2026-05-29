@@ -77,6 +77,14 @@ enum SendRequest {
         uuid: Uuid,
         reply: oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Pin or unpin a message in a conversation.
+    Pin {
+        conversation_id: String,
+        target_author_uuid: String,
+        target_timestamp: u64,
+        pinned: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Cast a vote on a poll message.
     PollVote {
         conversation_id: String,
@@ -405,6 +413,29 @@ impl MessagingService {
                 started,
             });
         }
+    }
+
+    /// Pin or unpin a message.
+    pub async fn set_pin(
+        &self,
+        conversation_id: &str,
+        target_author_uuid: &str,
+        target_timestamp: u64,
+        pinned: bool,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Pin {
+            conversation_id: conversation_id.to_string(),
+            target_author_uuid: target_author_uuid.to_string(),
+            target_timestamp,
+            pinned,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "pin reply dropped".to_string())?
     }
 
     /// Cast a vote on a poll.
@@ -1121,6 +1152,19 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             };
             let _ = reply.send(result);
         }
+        SendRequest::Pin {
+            conversation_id,
+            target_author_uuid,
+            target_timestamp,
+            pinned,
+            reply,
+        } => {
+            let result = do_send_pin(mgr, &conversation_id, &target_author_uuid, target_timestamp, pinned).await;
+            if let Err(ref e) = result {
+                error!("pin send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
         SendRequest::PollVote {
             conversation_id,
             target_author_uuid,
@@ -1315,6 +1359,56 @@ async fn do_safety_number(
 }
 
 /// Send a `DataMessage.pollVote` referencing a poll message.
+/// Send a `DataMessage.pinMessage`/`unpinMessage` for a target message.
+async fn do_send_pin(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_author_uuid: &str,
+    target_timestamp: u64,
+    pinned: bool,
+) -> Result<(), String> {
+    use presage::libsignal_service::proto::data_message::{PinMessage, UnpinMessage};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let author_bytes = target_author_uuid
+        .parse::<Uuid>()
+        .map(|u| u.as_bytes().to_vec())
+        .unwrap_or_default();
+    let data_message = if pinned {
+        DataMessage {
+            timestamp: Some(timestamp),
+            pin_message: Some(PinMessage {
+                target_author_aci_binary: Some(author_bytes),
+                target_sent_timestamp: Some(target_timestamp),
+                pin_duration: None,
+            }),
+            ..Default::default()
+        }
+    } else {
+        DataMessage {
+            timestamp: Some(timestamp),
+            unpin_message: Some(UnpinMessage {
+                target_author_aci_binary: Some(author_bytes),
+                target_sent_timestamp: Some(target_timestamp),
+            }),
+            ..Default::default()
+        }
+    };
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send pin: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group pin: {e}")),
+    }
+}
+
 async fn do_send_poll_vote(
     mgr: &mut Manager<SqliteStore, Registered>,
     conversation_id: &str,
