@@ -98,8 +98,11 @@ fn write_db_key_file(path: &std::path::Path, passphrase: &str) -> Result<(), Key
         .map_err(|e| KeychainError::StoreFailed(format!("open .db_key: {}", e)))?;
     f.write_all(passphrase.as_bytes())
         .map_err(|e| KeychainError::StoreFailed(format!("write .db_key: {}", e)))?;
-    f.write_all(b"
-").ok();
+    f.write_all(
+        b"
+",
+    )
+    .ok();
     Ok(())
 }
 
@@ -198,6 +201,13 @@ pub fn resolve_db_passphrase_for_cli_with_timeout(
     data_dir: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Result<Zeroizing<String>, KeychainError> {
+    // A zero timeout means "don't wait on the keychain at all" — go straight
+    // to the file fallback. Probing with recv_timeout(0) would race the
+    // keychain thread (which can win and even mint a fresh key), making the
+    // outcome non-deterministic; tests rely on the zero-timeout file path.
+    if timeout.is_zero() {
+        return read_passphrase_fallback_files(data_dir);
+    }
     let dir = data_dir.to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -286,10 +296,10 @@ pub(crate) mod tests {
                 .cloned())
         }
         fn set(&self, service: &str, account: &str, password: &[u8]) -> Result<(), KeychainError> {
-            self.store
-                .lock()
-                .unwrap()
-                .insert((service.to_string(), account.to_string()), password.to_vec());
+            self.store.lock().unwrap().insert(
+                (service.to_string(), account.to_string()),
+                password.to_vec(),
+            );
             Ok(())
         }
         fn delete(&self, service: &str, account: &str) -> Result<(), KeychainError> {
