@@ -25,10 +25,10 @@ the wire. Highest visual-parity-per-effort.
 
 | Feature | Hook | Size |
 |---|---|---|
-| **Profiles + avatars** | `retrieve_profile_by_uuid`, `retrieve_profile_avatar_by_uuid`, `retrieve_group_avatar`, store `save_profile/_avatar` | M |
-| **Quote / reply** | `DataMessage.quote` (parse + render + compose) | M |
+| ✅ **Profiles + avatars** | `retrieve_profile_by_uuid`, `retrieve_profile_avatar_by_uuid`, `retrieve_group_avatar`, store `save_profile/_avatar` | M |
+| ✅ **Quote / reply** | `DataMessage.quote` (parse + render + compose) | M |
 | **Disappearing messages** | `expireTimer` / `expireTimerVersion` (honor + display + set UI) | M |
-| **Link previews** | `DataMessage.preview` (render incoming; fetch outgoing = M) | S/M |
+| ✅ **Link previews** (inbound) | `DataMessage.preview` (render incoming; fetch outgoing = M) | S/M |
 | **View-once media** | `isViewOnce` | S |
 | **Mentions + rich text** | `bodyRanges` (bold/italic/strike/spoiler/mention render) | M |
 | **Contact cards** | `DataMessage.contact` | S |
@@ -55,6 +55,18 @@ the wire. Highest visual-parity-per-effort.
 
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
+
+## Shipped — wave 1 (branch parity-push, PR #3)
+
+- ✅ Contact + group avatars (list / header / picker)
+- ✅ Quote / reply (parse + render + compose + send)
+- ✅ Inbound link previews
+- ✅ Group sender names via profile-store fallback (no more raw UUIDs)
+- ✅ Reactions: send + render (chips + quick-emoji picker, was receive-only/unrendered)
+
+Reclassified: **disappearing messages** moved toward Tier B — faithful
+expiry needs per-message expiration-start tracking presage doesn't store,
+and a privacy app must not *show* a disappearing indicator it won't honor.
 
 ## Order of attack
 
