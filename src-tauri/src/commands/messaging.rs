@@ -357,3 +357,17 @@ pub async fn preview_backup(
 pub async fn preview_backup(_app: AppHandle, _path: String) -> Result<(), String> {
     Err("message backups are not available in this build".into())
 }
+
+/// Import contacts from an encrypted transfer archive.
+#[cfg(feature = "backups")]
+#[tauri::command]
+pub async fn import_backup(app: AppHandle, path: String) -> Result<usize, String> {
+    let state = app.state::<AppState>();
+    state.messaging.import_backup(&path).await
+}
+
+#[cfg(not(feature = "backups"))]
+#[tauri::command]
+pub async fn import_backup(_app: AppHandle, _path: String) -> Result<usize, String> {
+    Err("message backups are not available in this build".into())
+}

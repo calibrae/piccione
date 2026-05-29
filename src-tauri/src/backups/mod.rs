@@ -226,7 +226,7 @@ mod import_tests {
 #[cfg(feature = "backups")]
 pub fn backup_contact_to_presage(
     c: &libsignal_message_backup::proto::backup::Contact,
-) -> Option<presage::libsignal_service::models::Contact> {
+) -> Option<presage::model::contacts::Contact> {
     let aci = c.aci.as_ref()?;
     let uuid = uuid::Uuid::from_slice(aci).ok()?;
 
@@ -244,10 +244,12 @@ pub fn backup_contact_to_presage(
         })
         .unwrap_or_default();
 
-    Some(presage::libsignal_service::models::Contact {
+    Some(presage::model::contacts::Contact {
         uuid,
         phone_number: None,
         name,
+        verified: Default::default(),
+        profile_key: c.profileKey.clone().unwrap_or_default(),
         expire_timer: 0,
         expire_timer_version: 0,
         inbox_position: 0,
@@ -276,4 +278,47 @@ mod recipient_map_tests {
         let c = pb::Contact::new();
         assert!(backup_contact_to_presage(&c).is_none());
     }
+}
+
+
+/// Extract importable contacts from an encrypted transfer archive — the
+/// Recipient::Contact frames mapped to presage `Contact`s. (Group + ChatItem
+/// extraction follow; they need a real archive to validate = [LIVE-TEST].)
+#[cfg(feature = "backups")]
+pub async fn extract_contacts(
+    bytes: &[u8],
+    key: &libsignal_message_backup::key::MessageBackupKey,
+) -> Result<Vec<presage::model::contacts::Contact>, String> {
+    use libsignal_message_backup::frame::{CursorFactory, FramesReader};
+    use libsignal_message_backup::parse::VarintDelimitedReader;
+    use libsignal_message_backup::proto::backup as pb;
+    use protobuf3::Message;
+
+    let frames = FramesReader::new(key, CursorFactory::new(bytes))
+        .await
+        .map_err(|e| format!("open frames: {e}"))?;
+    let mut reader = VarintDelimitedReader::new(frames);
+    // Skip the BackupInfo header.
+    reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read header: {e}"))?
+        .ok_or("empty backup")?;
+
+    let mut contacts = Vec::new();
+    while let Some(buf) = reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read frame: {e}"))?
+    {
+        let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
+        if let Some(pb::frame::Item::Recipient(r)) = frame.item {
+            if let Some(pb::recipient::Destination::Contact(c)) = r.destination {
+                if let Some(contact) = backup_contact_to_presage(&c) {
+                    contacts.push(contact);
+                }
+            }
+        }
+    }
+    Ok(contacts)
 }
