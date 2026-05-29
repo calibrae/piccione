@@ -25,6 +25,7 @@
   let replyingTo = $state<ChatMessage | null>(null);
   let convoSearch = $state("");
   let showMsgSearch = $state(false);
+  let scrolledUp = $state(false);
   let msgSearch = $state("");
 
   onMount(async () => {
@@ -140,6 +141,15 @@
       // Toast already pushed by sendToRecipient — keep the form open so the
       // user can correct the recipient and try again.
     }
+  }
+
+  function onMessagesScroll() {
+    const el = messagesContainer;
+    if (!el) return;
+    scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight > 240;
+  }
+  function scrollToBottom() {
+    if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
   function autosize(e: Event) {
@@ -730,7 +740,7 @@
           {#if msgSearch}<span class="msg-search-count">{activeMessages.length}</span>{/if}
         </div>
       {/if}
-      <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
+      <div class="messages" data-testid="messages-container" bind:this={messagesContainer} onscroll={onMessagesScroll}>
         {#each activeMessages as msg, i}
           {#if isNewDay(i)}
             <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
@@ -887,6 +897,9 @@
           </div>
         {/each}
       </div>
+      {#if scrolledUp}
+        <button class="jump-latest" onclick={scrollToBottom} title="Aller au dernier message" aria-label="Aller au dernier message">⌄</button>
+      {/if}
       {#if someoneTyping}
         <div class="typing-indicator"><span></span><span></span><span></span></div>
       {/if}
@@ -956,6 +969,23 @@
 {/if}
 
 <style>
+  .jump-latest {
+    position: absolute;
+    right: 22px;
+    bottom: 84px;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--border, #27272a);
+    background: var(--bg-secondary, #16213e);
+    color: var(--text-primary, #e4e4e7);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    z-index: 5;
+  }
+  .chat-area { position: relative; }
   .msg-search {
     display: flex;
     align-items: center;
