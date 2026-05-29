@@ -376,6 +376,19 @@
   function cancelReply() {
     replyingTo = null;
   }
+  // Emoji-only (<= 6 glyphs) messages render large, like Signal.
+  function isJumbo(body: string | null | undefined): boolean {
+    if (!body) return false;
+    const t = body.trim();
+    if (!t) return false;
+    // Strip emoji (incl. ZWJ sequences, variation selectors) and whitespace;
+    // jumbo if nothing else remains.
+    const stripped = t.replace(/[\p{Extended_Pictographic}\p{Emoji_Component}\u200d\ufe0f\s]/gu, "");
+    if (stripped.length > 0) return false;
+    const glyphs = [...new Intl.Segmenter().segment(t)].filter((x) => x.segment.trim()).length;
+    return glyphs > 0 && glyphs <= 6;
+  }
+
   function quoteSnippet(msg: ChatMessage): string {
     if (msg.body) return msg.body;
     if (msg.attachments?.length) return "📎 " + (msg.attachments[0].file_name || "pièce jointe");
@@ -836,7 +849,7 @@
                 </div>
               {/if}
               {#if msg.body}
-                <p>
+                <p class:jumbomoji={!(msg.body_ranges && msg.body_ranges.length) && isJumbo(msg.body)}>
                   {#if msg.body_ranges && msg.body_ranges.length > 0}
                     {#each bodySegments(msg.body, msg.body_ranges) as seg}
                       {#if seg.mention}<span class="mention">@{resolveMention(seg.mention)}</span>{:else}<span
@@ -875,7 +888,7 @@
                   </button>
                 {/each}
               {/if}
-              <span class="msg-time">{formatTime(msg.timestamp)}</span>
+              <span class="msg-time" title={new Date(msg.timestamp).toLocaleString()}>{formatTime(msg.timestamp)}</span>
               {#if msg.is_outgoing}
                 {@const r = receiptStatus(msg.timestamp, messagingStore.activeConversationId)}
                 <span class="receipt receipt-{r}" title={r} aria-label={r}>
@@ -969,6 +982,10 @@
 {/if}
 
 <style>
+  .jumbomoji {
+    font-size: 2.6rem;
+    line-height: 1.1;
+  }
   .jump-latest {
     position: absolute;
     right: 22px;
