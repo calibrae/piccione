@@ -389,7 +389,13 @@ export function createMessagingStore() {
       return unsubscribers.length;
     },
     getMessages(conversationId: string): ChatMessage[] {
-      return messages.get(conversationId) ?? [];
+      const list = messages.get(conversationId) ?? [];
+      if (edits.size === 0) return list;
+      // Apply any received edits to the displayed body.
+      return list.map((m) => {
+        const e = edits.get(String(m.timestamp));
+        return e ? { ...m, body: e.new_text, edited: true } : m;
+      });
     },
     initListeners,
     loadConversations,
