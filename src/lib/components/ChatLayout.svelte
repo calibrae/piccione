@@ -35,6 +35,7 @@
 
   async function selectConversation(id: string) {
     messagingStore.activeConversationId = id;
+    messagingStore.markRead(id);
     showNewMessage = false;
     try {
       inputText = localStorage.getItem(draftKey(id)) ?? "";
@@ -523,7 +524,12 @@
                 <span class="convo-name">{convo.name}</span>
                 <span class="convo-time">{formatTime(convo.last_timestamp)}</span>
               </div>
-              <div class="convo-last">{convo.last_message ?? ""}</div>
+              <div class="convo-bottom">
+                <span class="convo-last">{convo.last_message ?? ""}</span>
+                {#if (messagingStore.unread.get(convo.id) ?? 0) > 0}
+                  <span class="unread-badge">{messagingStore.unread.get(convo.id)}</span>
+                {/if}
+              </div>
             </div>
           </button>
         {/each}
@@ -857,6 +863,26 @@
 {/if}
 
 <style>
+  .convo-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .unread-badge {
+    flex: 0 0 auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent, #3b82f6);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .composer-input {
     flex: 1;
     resize: none;

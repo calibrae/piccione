@@ -58,6 +58,8 @@ export function createMessagingStore() {
   let messages = $state<Map<string, ChatMessage[]>>(new Map());
   let selfId = $state<string | null>(null);
   let notifyOk = false;
+  // Per-conversation unread counts (in-memory; resets on restart).
+  let unread = $state<Map<string, number>>(new Map());
 
   async function ensureNotifyPermission() {
     try {
@@ -128,6 +130,10 @@ export function createMessagingStore() {
           const existing = messages.get(conversation_id) ?? [];
           messages.set(conversation_id, [...existing, message]);
           messages = new Map(messages);
+          if (!message.is_outgoing && conversation_id !== activeConversationId) {
+            unread.set(conversation_id, (unread.get(conversation_id) ?? 0) + 1);
+            unread = new Map(unread);
+          }
           void notifyInbound(conversation_id, message);
         }
       ),
@@ -336,6 +342,13 @@ export function createMessagingStore() {
     }
   }
 
+  function markRead(conversationId: string) {
+    if (unread.has(conversationId)) {
+      unread.delete(conversationId);
+      unread = new Map(unread);
+    }
+  }
+
   return {
     get conversations() {
       return conversations;
@@ -352,6 +365,10 @@ export function createMessagingStore() {
     get selfId() {
       return selfId;
     },
+    get unread() {
+      return unread;
+    },
+    markRead,
     get receipts() {
       return receipts;
     },
