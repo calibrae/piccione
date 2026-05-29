@@ -98,6 +98,13 @@ enum SendRequest {
     BackupStatus {
         reply: oneshot::Sender<bool>,
     },
+    /// Decrypt + summarize an encrypted transfer archive at `path` (preview
+    /// before import). Behind the `backups` feature.
+    #[cfg(feature = "backups")]
+    PreviewBackup {
+        path: String,
+        reply: oneshot::Sender<Result<crate::backups::BackupSummary, String>>,
+    },
     /// Compute the safety number (identity fingerprint) for a 1:1 contact.
     SafetyNumber {
         uuid: Uuid,
@@ -464,6 +471,22 @@ impl MessagingService {
         .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
         reply_rx.await.map_err(|_| "vote reply dropped".to_string())?
+    }
+
+    /// Decrypt + summarize an encrypted transfer archive (preview before
+    /// import). Runs on the messaging thread (store/manager access).
+    #[cfg(feature = "backups")]
+    pub async fn preview_backup(
+        &self,
+        path: &str,
+    ) -> Result<crate::backups::BackupSummary, String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::PreviewBackup { path: path.to_string(), reply: reply_tx })
+            .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "preview reply dropped".to_string())?
     }
 
     /// Whether this device can derive a BackupKey (AEP persisted at link).
@@ -1211,6 +1234,11 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
                 .is_some();
             let _ = reply.send(ready);
         }
+        #[cfg(feature = "backups")]
+        SendRequest::PreviewBackup { path, reply } => {
+            let result = preview_backup_impl(mgr, &path).await;
+            let _ = reply.send(result);
+        }
         SendRequest::SafetyNumber { uuid, reply } => {
             let result = do_safety_number(mgr, uuid).await;
             let _ = reply.send(result);
@@ -1327,6 +1355,23 @@ async fn do_send_delete(
 /// `generateSafetyNumber` exactly: libsignal `Fingerprint` with
 /// ITERATION_COUNT=5200, SERVICE_ID_VERSION=2, and the 16-byte ACI UUIDs as
 /// the local/remote identifiers — so the result matches the official client.
+#[cfg(feature = "backups")]
+async fn preview_backup_impl(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    path: &str,
+) -> Result<crate::backups::BackupSummary, String> {
+    use presage::libsignal_service::protocol::Aci;
+    let reg = mgr.registration_data();
+    let aep = reg
+        .account_entropy_pool()
+        .ok_or("no account entropy pool (relink needed for backups)")?;
+    let aci = Aci::from(reg.service_ids.aci);
+    let key = crate::backups::derive_message_backup_key(aep, aci)
+        .ok_or("could not derive backup key")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("read archive: {e}"))?;
+    crate::backups::summarize_backup(&bytes, &key).await
+}
+
 async fn do_safety_number(
     mgr: &mut Manager<SqliteStore, Registered>,
     their_uuid: Uuid,
