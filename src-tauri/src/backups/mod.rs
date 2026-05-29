@@ -218,3 +218,62 @@ mod import_tests {
         assert!(sum.selfs >= 1, "Self recipient should decode, got {sum:?}");
     }
 }
+
+
+/// Map a backup `Contact` frame to a presage `Contact` for store import.
+/// Prefers the system (address-book) name, then the profile name. `None` if
+/// the ACI is missing/!16 bytes (can't key a contact without it).
+#[cfg(feature = "backups")]
+pub fn backup_contact_to_presage(
+    c: &libsignal_message_backup::proto::backup::Contact,
+) -> Option<presage::libsignal_service::models::Contact> {
+    let aci = c.aci.as_ref()?;
+    let uuid = uuid::Uuid::from_slice(aci).ok()?;
+
+    let join = |g: &str, f: &str| {
+        let n = format!("{g} {f}");
+        let t = n.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    };
+    let name = join(&c.systemGivenName, &c.systemFamilyName)
+        .or_else(|| {
+            join(
+                c.profileGivenName.as_deref().unwrap_or(""),
+                c.profileFamilyName.as_deref().unwrap_or(""),
+            )
+        })
+        .unwrap_or_default();
+
+    Some(presage::libsignal_service::models::Contact {
+        uuid,
+        phone_number: None,
+        name,
+        expire_timer: 0,
+        expire_timer_version: 0,
+        inbox_position: 0,
+        avatar: None,
+    })
+}
+
+#[cfg(all(test, feature = "backups"))]
+mod recipient_map_tests {
+    use super::*;
+    use libsignal_message_backup::proto::backup as pb;
+
+    #[test]
+    fn contact_proto_maps_to_presage_contact() {
+        let mut c = pb::Contact::new();
+        c.aci = Some(vec![7u8; 16]);
+        c.profileGivenName = Some("Alice".to_string());
+        c.profileFamilyName = Some("A".to_string());
+        let mapped = backup_contact_to_presage(&c).expect("maps");
+        assert_eq!(mapped.uuid, uuid::Uuid::from_slice(&[7u8; 16]).unwrap());
+        assert_eq!(mapped.name, "Alice A");
+    }
+
+    #[test]
+    fn contact_without_aci_is_skipped() {
+        let c = pb::Contact::new();
+        assert!(backup_contact_to_presage(&c).is_none());
+    }
+}
