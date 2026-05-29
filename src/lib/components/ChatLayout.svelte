@@ -974,7 +974,7 @@
           {/if}
           {#if msg.system_event}
             <div class="system-event">
-              {msg.system_event === "group-call" ? "📞 Appel de groupe" : msg.system_event}
+              {msg.system_event === "group-call" ? "📞 Appel de groupe" : msg.system_event === "gift-badge" ? "🎁 Badge cadeau" : msg.system_event}
             </div>
           {:else}
           <div class="message" class:outgoing={msg.is_outgoing} class:highlight={highlightTs === msg.timestamp} data-ts={msg.timestamp}>

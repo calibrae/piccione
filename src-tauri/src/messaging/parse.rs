@@ -153,6 +153,9 @@ fn system_event(dm: &DataMessage) -> Option<String> {
     if dm.group_call_update.is_some() {
         return Some("group-call".to_string());
     }
+    if dm.gift_badge.is_some() {
+        return Some("gift-badge".to_string());
+    }
     None
 }
 
