@@ -291,3 +291,11 @@ pub async fn set_profile(
     let state = app.state::<AppState>();
     state.messaging.set_profile(given_name, family_name, about).await
 }
+
+/// Compute the safety number (identity fingerprint) for a 1:1 contact.
+#[tauri::command]
+pub async fn get_safety_number(app: AppHandle, uuid: String) -> Result<String, String> {
+    let parsed = uuid::Uuid::parse_str(&uuid).map_err(|_| "invalid uuid".to_string())?;
+    let state = app.state::<AppState>();
+    state.messaging.safety_number(parsed).await
+}

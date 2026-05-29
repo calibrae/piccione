@@ -188,6 +188,7 @@ pub fn run() {
             commands::messaging::search_messages,
             commands::messaging::fetch_profile,
             commands::messaging::set_profile,
+            commands::messaging::get_safety_number,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
