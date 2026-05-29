@@ -37,20 +37,21 @@ describe("messagingStore.initListeners", () => {
   it("registers exactly one listener per event", async () => {
     const store = createMessagingStore();
     await store.initListeners();
-    // 7 IPC events: new-message, conversations-updated, read-receipt,
-    // typing-indicator, reaction, message-edited, message-deleted.
+    // 8 IPC events: new-message, conversations-updated, read-receipt,
+    // typing-indicator, reaction, poll-vote, message-edited, message-deleted.
     const expected = new Set([
       "new-message",
       "conversations-updated",
       "read-receipt",
       "typing-indicator",
       "reaction",
+      "poll-vote",
       "message-edited",
       "message-deleted",
     ]);
     expect(new Set(listenCalls)).toEqual(expected);
-    expect(listenCalls.length).toBe(7);
-    expect(store._listenerCount).toBe(7);
+    expect(listenCalls.length).toBe(8);
+    expect(store._listenerCount).toBe(8);
   });
 
   it("is idempotent: a second initListeners call does not double-subscribe", async () => {
@@ -59,15 +60,15 @@ describe("messagingStore.initListeners", () => {
     const firstCount = listenCalls.length;
     await store.initListeners();
     expect(listenCalls.length).toBe(firstCount);
-    expect(store._listenerCount).toBe(7);
+    expect(store._listenerCount).toBe(8);
   });
 
   it("returns a teardown that unsubscribes every listener", async () => {
     const store = createMessagingStore();
     const teardown = await store.initListeners();
-    expect(store._listenerCount).toBe(7);
+    expect(store._listenerCount).toBe(8);
     await teardown();
-    expect(unlistenCalls.length).toBe(7);
+    expect(unlistenCalls.length).toBe(8);
     expect(store._listenerCount).toBe(0);
   });
 
@@ -77,8 +78,8 @@ describe("messagingStore.initListeners", () => {
     await teardown();
     listenCalls.length = 0;
     await store.initListeners();
-    expect(listenCalls.length).toBe(7);
-    expect(store._listenerCount).toBe(7);
+    expect(listenCalls.length).toBe(8);
+    expect(store._listenerCount).toBe(8);
   });
 });
 

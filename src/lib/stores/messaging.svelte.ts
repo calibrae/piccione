@@ -32,6 +32,13 @@ export interface TypingPayload {
   action: TypingActionKind;
 }
 
+export interface PollVotePayload {
+  chat_id: string;
+  poll_id: string;
+  voter_id: string;
+  option_indexes: number[];
+}
+
 export interface ReactionPayload {
   chat_id: string;
   target_message_id: string;
@@ -124,6 +131,8 @@ export function createMessagingStore() {
   let edits = $state<Map<string, EditPayload>>(new Map());
   // message_id -> tombstone marker
   let deletions = $state<Set<string>>(new Set());
+  // chat_id -> poll_id -> voter_id -> option indexes
+  let pollVotes = $state<Map<string, Map<string, Map<string, number[]>>>>(new Map());
 
   // Cleanup handles for IPC listeners. Populated by `initListeners()`,
   // drained by the returned teardown to prevent pile-ups on HMR / app restart.
@@ -199,6 +208,15 @@ export function createMessagingStore() {
         }
         reactions.set(p.chat_id, perChat);
         reactions = new Map(reactions);
+      }),
+      listen<PollVotePayload>("poll-vote", (event) => {
+        const p = event.payload;
+        const perChat = pollVotes.get(p.chat_id) ?? new Map();
+        const perPoll = perChat.get(p.poll_id) ?? new Map();
+        perPoll.set(p.voter_id, p.option_indexes);
+        perChat.set(p.poll_id, perPoll);
+        pollVotes.set(p.chat_id, perChat);
+        pollVotes = new Map(pollVotes);
       }),
       listen<EditPayload>("message-edited", (event) => {
         const p = event.payload;
@@ -371,6 +389,31 @@ export function createMessagingStore() {
     persistMuted();
   }
 
+  async function votePoll(
+    conversationId: string,
+    pollAuthorUuid: string,
+    pollTimestamp: number,
+    optionIndexes: number[]
+  ) {
+    try {
+      await invoke("vote_poll", {
+        conversationId,
+        targetAuthorUuid: pollAuthorUuid,
+        targetTimestamp: pollTimestamp,
+        optionIndexes,
+      });
+      // Optimistic local tally.
+      const perChat = pollVotes.get(conversationId) ?? new Map();
+      const perPoll = perChat.get(String(pollTimestamp)) ?? new Map();
+      perPoll.set(selfId ?? "", optionIndexes);
+      perChat.set(String(pollTimestamp), perPoll);
+      pollVotes.set(conversationId, perChat);
+      pollVotes = new Map(pollVotes);
+    } catch (e) {
+      console.error("vote_poll failed:", e);
+    }
+  }
+
   async function fetchProfile(uuid: string) {
     try {
       const name = await invoke<string | null>("fetch_profile", { uuid });
@@ -413,6 +456,10 @@ export function createMessagingStore() {
     isMuted,
     toggleMute,
     fetchProfile,
+    get pollVotes() {
+      return pollVotes;
+    },
+    votePoll,
     get receipts() {
       return receipts;
     },

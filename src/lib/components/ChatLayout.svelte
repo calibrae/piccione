@@ -530,6 +530,37 @@
     return segs;
   }
 
+  function pollTally(msg: ChatMessage, optionIndex: number): number {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return 0;
+    const perPoll = messagingStore.pollVotes.get(cid)?.get(String(msg.timestamp));
+    if (!perPoll) return 0;
+    let n = 0;
+    for (const idxs of perPoll.values()) if (idxs.includes(optionIndex)) n++;
+    return n;
+  }
+  function myPollVote(msg: ChatMessage, optionIndex: number): boolean {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return false;
+    const me = messagingStore.selfId ?? "";
+    return !!messagingStore.pollVotes.get(cid)?.get(String(msg.timestamp))?.get(me)?.includes(optionIndex);
+  }
+  function castVote(msg: ChatMessage, optionIndex: number) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid || !msg.poll) return;
+    const me = messagingStore.selfId ?? "";
+    const current = messagingStore.pollVotes.get(cid)?.get(String(msg.timestamp))?.get(me) ?? [];
+    let next: number[];
+    if (msg.poll.allow_multiple) {
+      next = current.includes(optionIndex)
+        ? current.filter((i) => i !== optionIndex)
+        : [...current, optionIndex];
+    } else {
+      next = current.includes(optionIndex) ? [] : [optionIndex];
+    }
+    messagingStore.votePoll(cid, msg.sender_id, msg.timestamp, next);
+  }
+
   async function copyMessage(msg: ChatMessage) {
     if (!msg.body) return;
     try {
@@ -1032,7 +1063,14 @@
                 <div class="poll">
                   <div class="poll-q">📊 {msg.poll.question}</div>
                   {#each msg.poll.options as opt, i}
-                    <div class="poll-opt">{String.fromCharCode(65 + i)}. {opt}</div>
+                    <button
+                      class="poll-opt"
+                      class:voted={myPollVote(msg, i)}
+                      onclick={() => castVote(msg, i)}
+                    >
+                      <span class="poll-opt-text">{String.fromCharCode(65 + i)}. {opt}</span>
+                      {#if pollTally(msg, i) > 0}<span class="poll-count">{pollTally(msg, i)}</span>{/if}
+                    </button>
                   {/each}
                   {#if msg.poll.allow_multiple}<div class="poll-note">Choix multiples autorisés</div>{/if}
                 </div>

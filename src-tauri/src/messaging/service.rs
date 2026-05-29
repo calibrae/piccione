@@ -77,6 +77,14 @@ enum SendRequest {
         uuid: Uuid,
         reply: oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Cast a vote on a poll message.
+    PollVote {
+        conversation_id: String,
+        target_author_uuid: String,
+        target_timestamp: u64,
+        option_indexes: Vec<u32>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Compute the safety number (identity fingerprint) for a 1:1 contact.
     SafetyNumber {
         uuid: Uuid,
@@ -397,6 +405,29 @@ impl MessagingService {
                 started,
             });
         }
+    }
+
+    /// Cast a vote on a poll.
+    pub async fn vote_poll(
+        &self,
+        conversation_id: &str,
+        target_author_uuid: &str,
+        target_timestamp: u64,
+        option_indexes: Vec<u32>,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::PollVote {
+            conversation_id: conversation_id.to_string(),
+            target_author_uuid: target_author_uuid.to_string(),
+            target_timestamp,
+            option_indexes,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "vote reply dropped".to_string())?
     }
 
     /// Compute the safety number for a contact — the 60-digit identity
@@ -1090,6 +1121,26 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             };
             let _ = reply.send(result);
         }
+        SendRequest::PollVote {
+            conversation_id,
+            target_author_uuid,
+            target_timestamp,
+            option_indexes,
+            reply,
+        } => {
+            let result = do_send_poll_vote(
+                mgr,
+                &conversation_id,
+                &target_author_uuid,
+                target_timestamp,
+                option_indexes,
+            )
+            .await;
+            if let Err(ref e) = result {
+                error!("poll vote send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
         SendRequest::SafetyNumber { uuid, reply } => {
             let result = do_safety_number(mgr, uuid).await;
             let _ = reply.send(result);
@@ -1261,6 +1312,48 @@ async fn do_safety_number(
         .map(|c| String::from_utf8_lossy(c).into_owned())
         .collect();
     Ok(blocks.join(" "))
+}
+
+/// Send a `DataMessage.pollVote` referencing a poll message.
+async fn do_send_poll_vote(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_author_uuid: &str,
+    target_timestamp: u64,
+    option_indexes: Vec<u32>,
+) -> Result<(), String> {
+    use presage::libsignal_service::proto::data_message::PollVote;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let author_bytes = target_author_uuid
+        .parse::<Uuid>()
+        .map(|u| u.as_bytes().to_vec())
+        .unwrap_or_default();
+    let vote_count = option_indexes.len() as u32;
+    let poll_vote = PollVote {
+        target_author_aci_binary: Some(author_bytes),
+        target_sent_timestamp: Some(target_timestamp),
+        option_indexes,
+        vote_count: Some(vote_count),
+    };
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        poll_vote: Some(poll_vote),
+        ..Default::default()
+    };
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send vote: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group vote: {e}")),
+    }
 }
 
 async fn do_send_typing(
