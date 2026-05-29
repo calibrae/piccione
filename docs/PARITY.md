@@ -56,6 +56,13 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 6 (merged to main)
+
+- ✅ Global message search across all conversations (read-only backend)
+- ✅ Per-conversation mute
+
+**Session total: 24 Tier-A features merged. Coverage ~12 → ~32 of ~210.**
+
 ## Shipped — wave 5 (merged to main)
 
 - ✅ In-conversation message search
