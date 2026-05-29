@@ -432,6 +432,78 @@ mod message_import_tests {
     }
 
     #[test]
+    fn reconstructs_a_group_text_message() {
+        let me = uuid::Uuid::from_bytes([1u8; 16]);
+        let author = uuid::Uuid::from_bytes([3u8; 16]);
+        let master_key = [7u8; 32];
+
+        let info = pb::BackupInfo::new();
+
+        // Author contact (recipient 5).
+        let mut contact = pb::Contact::new();
+        contact.aci = Some(author.as_bytes().to_vec());
+        let mut rec_c = pb::Recipient::new();
+        rec_c.id = 5;
+        rec_c.destination = Some(pb::recipient::Destination::Contact(contact));
+        let mut f_c = pb::Frame::new();
+        f_c.item = Some(pb::frame::Item::Recipient(rec_c));
+
+        // Group recipient (recipient 8) carrying the master key.
+        let mut group = pb::Group::new();
+        group.masterKey = master_key.to_vec();
+        let mut rec_g = pb::Recipient::new();
+        rec_g.id = 8;
+        rec_g.destination = Some(pb::recipient::Destination::Group(group));
+        let mut f_g = pb::Frame::new();
+        f_g.item = Some(pb::frame::Item::Recipient(rec_g));
+
+        // Chat 20 -> group recipient 8.
+        let mut chat = pb::Chat::new();
+        chat.id = 20;
+        chat.recipientId = 8;
+        let mut f_chat = pb::Frame::new();
+        f_chat.item = Some(pb::frame::Item::Chat(chat));
+
+        // Group message authored by recipient 5.
+        let mut text = pb::Text::new();
+        text.body = "group hi".to_string();
+        let mut sm = pb::StandardMessage::new();
+        sm.text = Some(text).into();
+        let mut item = pb::ChatItem::new();
+        item.chatId = 20;
+        item.authorId = 5;
+        item.dateSent = 1_700_000_001_000;
+        item.item = Some(pb::chat_item::Item::StandardMessage(sm));
+        let mut f_item = pb::Frame::new();
+        f_item.item = Some(pb::frame::Item::ChatItem(item));
+
+        let bytes = delimited(&[
+            info.write_to_bytes().unwrap(),
+            f_c.write_to_bytes().unwrap(),
+            f_g.write_to_bytes().unwrap(),
+            f_chat.write_to_bytes().unwrap(),
+            f_item.write_to_bytes().unwrap(),
+        ]);
+
+        let reader = libsignal_message_backup::parse::VarintDelimitedReader::new(
+            futures::io::Cursor::new(bytes),
+        );
+        let data = futures::executor::block_on(extract_from_reader(reader, me)).expect("extract");
+
+        assert_eq!(data.messages.len(), 1, "one group message");
+        let (thread, content) = &data.messages[0];
+        match thread {
+            presage::store::Thread::Group(mk) => assert_eq!(*mk, master_key),
+            _ => panic!("expected group thread"),
+        }
+        if let presage::libsignal_service::content::ContentBody::DataMessage(dm) = &content.body {
+            assert_eq!(dm.body.as_deref(), Some("group hi"));
+        } else {
+            panic!("expected DataMessage");
+        }
+    }
+
+    #[test]
     fn reconstructs_a_1to1_text_message() {
         let me = uuid::Uuid::from_bytes([1u8; 16]);
         let peer = uuid::Uuid::from_bytes([2u8; 16]);
