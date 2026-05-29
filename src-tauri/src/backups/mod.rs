@@ -42,3 +42,127 @@ mod tests {
         // covered above; this test then just asserts no panic.
     }
 }
+
+
+/// Derive the per-backup `MessageBackupKey` (HMAC + AES) for *this* account
+/// from the persisted AEP and our ACI — the key `BackupReader` needs to
+/// decrypt a backup/transfer archive. Behind the `backups` feature because it
+/// pulls the `libsignal-message-backup` codec crate.
+#[cfg(feature = "backups")]
+pub fn derive_message_backup_key(
+    aep_str: &str,
+    aci: presage::libsignal_service::protocol::Aci,
+) -> Option<libsignal_message_backup::key::MessageBackupKey> {
+    let backup_key = derive_backup_key(aep_str)?;
+    let backup_id = backup_key.derive_backup_id(&aci);
+    Some(libsignal_message_backup::key::MessageBackupKey::derive(
+        &backup_key,
+        &backup_id,
+        None,
+    ))
+}
+
+#[cfg(all(test, feature = "backups"))]
+mod backup_key_tests {
+    use super::*;
+    use presage::libsignal_service::protocol::Aci;
+
+    #[test]
+    fn message_backup_key_derivation_compiles_and_runs() {
+        // Cross-version sanity: BackupKey (account-keys) feeds MessageBackupKey
+        // (message-backup) without a type mismatch, end to end.
+        let aci = Aci::from(uuid::Uuid::nil());
+        let _ = derive_message_backup_key(&"0".repeat(64), aci);
+    }
+}
+
+
+/// Open an encrypted Link-and-Sync transfer archive from in-memory `bytes`,
+/// decrypt + decompress + structurally validate it, and report how many
+/// unknown proto fields were seen (forward-compat signal). This is the
+/// `BackupReader` entry point the import path builds on; once this returns
+/// `Ok`, the next layer walks the frames into the presage store.
+///
+/// `Purpose::DeviceTransfer` matches the Link & Sync archive a primary
+/// produces (vs `RemoteBackup` for the SVR-B remote-backup tier).
+#[cfg(feature = "backups")]
+pub async fn validate_backup(
+    bytes: &[u8],
+    key: &libsignal_message_backup::key::MessageBackupKey,
+) -> Result<usize, String> {
+    use libsignal_message_backup::backup::Purpose;
+    use libsignal_message_backup::frame::CursorFactory;
+    use libsignal_message_backup::BackupReader;
+
+    let reader = BackupReader::new_encrypted_compressed(
+        key,
+        CursorFactory::new(bytes),
+        Purpose::DeviceTransfer,
+    )
+    .await
+    .map_err(|e| format!("open backup: {e}"))?;
+
+    let result = reader.validate_all().await;
+    result
+        .result
+        .map_err(|e| format!("backup validation failed: {e}"))?;
+    Ok(result.found_unknown_fields.len())
+}
+
+
+/// Per-frame-type counts from a transfer archive — the read-loop foundation
+/// the store-import builds on. Walks the decrypted, length-delimited frame
+/// stream (`FramesReader` → `VarintDelimitedReader` → `proto::backup::Frame`)
+/// after the `BackupInfo` header. A real `Frame`→presage-store mapping
+/// replaces the counters; the loop structure is the same.
+#[cfg(feature = "backups")]
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct BackupSummary {
+    pub recipients: usize,
+    pub chats: usize,
+    pub chat_items: usize,
+    pub sticker_packs: usize,
+    pub other: usize,
+}
+
+#[cfg(feature = "backups")]
+pub async fn summarize_backup(
+    bytes: &[u8],
+    key: &libsignal_message_backup::key::MessageBackupKey,
+) -> Result<BackupSummary, String> {
+    use libsignal_message_backup::frame::{CursorFactory, FramesReader};
+    use libsignal_message_backup::parse::VarintDelimitedReader;
+    use libsignal_message_backup::proto::backup as pb;
+    use protobuf3::Message;
+
+    let frames = FramesReader::new(key, CursorFactory::new(bytes))
+        .await
+        .map_err(|e| format!("open frames: {e}"))?;
+    let mut reader = VarintDelimitedReader::new(frames);
+
+    // First length-delimited message is the BackupInfo header.
+    let header = reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read header: {e}"))?
+        .ok_or("empty backup")?;
+    let _info = pb::BackupInfo::parse_from_bytes(&header)
+        .map_err(|e| format!("decode BackupInfo: {e}"))?;
+
+    let mut sum = BackupSummary::default();
+    while let Some(buf) = reader
+        .read_next()
+        .await
+        .map_err(|e| format!("read frame: {e}"))?
+    {
+        let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
+        match frame.item {
+            Some(pb::frame::Item::Recipient(_)) => sum.recipients += 1,
+            Some(pb::frame::Item::Chat(_)) => sum.chats += 1,
+            Some(pb::frame::Item::ChatItem(_)) => sum.chat_items += 1,
+            Some(pb::frame::Item::StickerPack(_)) => sum.sticker_packs += 1,
+            _ => sum.other += 1,
+        }
+    }
+    Ok(sum)
+}
