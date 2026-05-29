@@ -62,6 +62,12 @@ enum SendRequest {
         remove: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Delete-for-everyone: retract a previously-sent message.
+    Delete {
+        conversation_id: String,
+        target_timestamp: u64,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Core messaging service.
@@ -348,6 +354,25 @@ impl MessagingService {
             target_timestamp,
             emoji: emoji.to_string(),
             remove,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Delete-for-everyone a message you sent.
+    pub async fn send_delete(
+        &self,
+        conversation_id: &str,
+        target_timestamp: u64,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Delete {
+            conversation_id: conversation_id.to_string(),
+            target_timestamp,
             reply: reply_tx,
         })
         .map_err(|_| "send channel closed".to_string())?;
@@ -827,6 +852,17 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             }
             let _ = reply.send(result);
         }
+        SendRequest::Delete {
+            conversation_id,
+            target_timestamp,
+            reply,
+        } => {
+            let result = do_send_delete(mgr, &conversation_id, target_timestamp).await;
+            if let Err(ref e) = result {
+                error!("delete send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -886,6 +922,36 @@ async fn do_send_receipt(
 
 /// Send a `DataMessage.reaction` (add or remove) to the target message's
 /// thread. `target_author_uuid` is the ACI of the message being reacted to.
+/// Send a `DataMessage.delete` (delete-for-everyone) for a message we sent.
+async fn do_send_delete(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_timestamp: u64,
+) -> Result<(), String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        delete: Some(Delete {
+            target_sent_timestamp: Some(target_timestamp),
+        }),
+        ..Default::default()
+    };
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send delete: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group delete: {e}")),
+    }
+}
+
 async fn do_send_reaction(
     mgr: &mut Manager<SqliteStore, Registered>,
     conversation_id: &str,

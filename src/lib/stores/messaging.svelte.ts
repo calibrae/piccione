@@ -288,6 +288,18 @@ export function createMessagingStore() {
     }
   }
 
+  async function deleteForEveryone(conversationId: string, targetTimestamp: number) {
+    try {
+      await invoke("delete_for_everyone", { conversationId, targetTimestamp });
+      // Optimistically hide locally.
+      deletions.add(String(targetTimestamp));
+      deletions = new Set(deletions);
+    } catch (e) {
+      console.error("delete_for_everyone failed:", e);
+      toastStore.error("Échec de la suppression");
+    }
+  }
+
   return {
     get conversations() {
       return conversations;
@@ -334,6 +346,7 @@ export function createMessagingStore() {
     sendToRecipient,
     loadSelfId,
     sendReaction,
+    deleteForEveryone,
   };
 }
 

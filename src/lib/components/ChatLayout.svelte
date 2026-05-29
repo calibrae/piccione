@@ -211,9 +211,10 @@
   }
 
   let activeMessages = $derived(
-    messagingStore.activeConversationId
+    (messagingStore.activeConversationId
       ? messagingStore.getMessages(messagingStore.activeConversationId)
       : []
+    ).filter((m) => !messagingStore.deletions.has(String(m.timestamp)))
   );
 
   // Auto-scroll when messages change. messagesContainer is now $state-tracked,
@@ -281,6 +282,21 @@
     // Tapping your current emoji removes it; otherwise (re)set to the new one.
     const remove = mine === emoji;
     messagingStore.sendReaction(cid, msg.sender_id, msg.timestamp, emoji, remove);
+  }
+
+  async function copyMessage(msg: ChatMessage) {
+    if (!msg.body) return;
+    try {
+      await navigator.clipboard.writeText(msg.body);
+    } catch (e) {
+      console.error("copy failed:", e);
+    }
+  }
+  function deleteMessage(msg: ChatMessage) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return;
+    if (!confirm("Supprimer ce message pour tout le monde ?")) return;
+    messagingStore.deleteForEveryone(cid, msg.timestamp);
   }
 
   function openLightbox(src: string) {
@@ -546,6 +562,22 @@
                 aria-label="Répondre"
                 onclick={() => startReply(msg)}
               >↩</button>
+              {#if msg.body}
+                <button
+                  class="reply-action"
+                  title="Copier"
+                  aria-label="Copier"
+                  onclick={() => copyMessage(msg)}
+                >⧉</button>
+              {/if}
+              {#if msg.is_outgoing}
+                <button
+                  class="reply-action"
+                  title="Supprimer pour tout le monde"
+                  aria-label="Supprimer"
+                  onclick={() => deleteMessage(msg)}
+                >🗑</button>
+              {/if}
             </div>
             {#if reactingTo === msg.timestamp}
               <div class="emoji-picker">
@@ -779,10 +811,10 @@
     transition: opacity 0.12s;
   }
   .message:not(.outgoing) .msg-actions {
-    right: -62px;
+    right: -92px;
   }
   .message.outgoing .msg-actions {
-    left: -62px;
+    left: -124px;
   }
   .message:hover .msg-actions {
     opacity: 1;

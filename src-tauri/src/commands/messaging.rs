@@ -223,3 +223,17 @@ pub async fn send_reaction(
         )
         .await
 }
+
+/// Delete-for-everyone a message you previously sent.
+#[tauri::command]
+pub async fn delete_for_everyone(
+    app: AppHandle,
+    conversation_id: String,
+    target_timestamp: u64,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .send_delete(&conversation_id, target_timestamp)
+        .await
+}
