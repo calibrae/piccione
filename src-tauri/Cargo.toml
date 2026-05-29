@@ -68,15 +68,20 @@ log = { version = "0.4", optional = true }  # ringrtc::webrtc::logging::set_logg
 # behaviour returns pages to the OS, cutting steady-state RSS by ~30-50%.
 mimalloc = { version = "0.1", default-features = false }
 tauri-plugin-opener = "2"
+# Message backups / Link & Sync codec (Tier B). Same libsignal tag as
+# libsignal-service (v0.91.0) so account-keys/protocol types unify.
+libsignal-message-backup = { git = "https://github.com/signalapp/libsignal", tag = "v0.91.0", optional = true }
 tauri-plugin-notification = "2"
 
 [dev-dependencies]
 mockall = "0.13"
 
 [features]
-default = ["voice"]
+default = ["voice", "backups"]
 # Voice calls via RingRTC. Off on Windows (see the ringrtc dep comment).
 voice = ["dep:ringrtc", "dep:log"]
+# Message backups / Link & Sync history import.
+backups = ["dep:libsignal-message-backup"]
 test = ["tauri/test"]
 
 [patch.crates-io]

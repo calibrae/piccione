@@ -42,3 +42,36 @@ mod tests {
         // covered above; this test then just asserts no panic.
     }
 }
+
+
+/// Derive the per-backup `MessageBackupKey` (HMAC + AES) for *this* account
+/// from the persisted AEP and our ACI — the key `BackupReader` needs to
+/// decrypt a backup/transfer archive. Behind the `backups` feature because it
+/// pulls the `libsignal-message-backup` codec crate.
+#[cfg(feature = "backups")]
+pub fn derive_message_backup_key(
+    aep_str: &str,
+    aci: presage::libsignal_service::protocol::Aci,
+) -> Option<libsignal_message_backup::key::MessageBackupKey> {
+    let backup_key = derive_backup_key(aep_str)?;
+    let backup_id = backup_key.derive_backup_id(&aci);
+    Some(libsignal_message_backup::key::MessageBackupKey::derive(
+        &backup_key,
+        &backup_id,
+        None,
+    ))
+}
+
+#[cfg(all(test, feature = "backups"))]
+mod backup_key_tests {
+    use super::*;
+    use presage::libsignal_service::protocol::Aci;
+
+    #[test]
+    fn message_backup_key_derivation_compiles_and_runs() {
+        // Cross-version sanity: BackupKey (account-keys) feeds MessageBackupKey
+        // (message-backup) without a type mismatch, end to end.
+        let aci = Aci::from(uuid::Uuid::nil());
+        let _ = derive_message_backup_key(&"0".repeat(64), aci);
+    }
+}
