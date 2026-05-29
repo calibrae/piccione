@@ -58,6 +58,24 @@ export function createMessagingStore() {
   let messages = $state<Map<string, ChatMessage[]>>(new Map());
   let selfId = $state<string | null>(null);
   let notifyOk = false;
+  // Per-conversation mute (persisted). Muted threads suppress notifications.
+  let muted = $state<Set<string>>(loadMuted());
+
+  function loadMuted(): Set<string> {
+    try {
+      const raw = localStorage.getItem("piccione.muted");
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  }
+  function persistMuted() {
+    try {
+      localStorage.setItem("piccione.muted", JSON.stringify([...muted]));
+    } catch {
+      /* ignore */
+    }
+  }
   // Per-conversation unread counts (in-memory; resets on restart).
   let unread = $state<Map<string, number>>(new Map());
 
@@ -73,6 +91,7 @@ export function createMessagingStore() {
   // Desktop notification for an inbound message when the window is not focused.
   async function notifyInbound(conversationId: string, message: ChatMessage) {
     if (message.is_outgoing) return;
+    if (muted.has(conversationId)) return;
     if (typeof document !== "undefined" && document.hasFocus()) return;
     if (!notifyOk) await ensureNotifyPermission();
     if (!notifyOk) return;
@@ -342,6 +361,16 @@ export function createMessagingStore() {
     }
   }
 
+  function isMuted(conversationId: string): boolean {
+    return muted.has(conversationId);
+  }
+  function toggleMute(conversationId: string) {
+    if (muted.has(conversationId)) muted.delete(conversationId);
+    else muted.add(conversationId);
+    muted = new Set(muted);
+    persistMuted();
+  }
+
   function markRead(conversationId: string) {
     if (unread.has(conversationId)) {
       unread.delete(conversationId);
@@ -369,6 +398,11 @@ export function createMessagingStore() {
       return unread;
     },
     markRead,
+    get muted() {
+      return muted;
+    },
+    isMuted,
+    toggleMute,
     get receipts() {
       return receipts;
     },
