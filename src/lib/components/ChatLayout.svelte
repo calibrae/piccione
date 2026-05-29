@@ -331,6 +331,7 @@
 
   let filteredConversations = $derived(
     messagingStore.conversations.filter((c) => {
+      if (messagingStore.isBlocked(c.id)) return false;
       const q = convoSearch.trim().toLowerCase();
       return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
     })
@@ -895,6 +896,14 @@
           >
             🔒
           </button>
+          <button
+            class="icon-btn"
+            onclick={() => messagingStore.toggleBlock(activeConversation.id)}
+            title={messagingStore.isBlocked(activeConversation.id) ? "Débloquer" : "Bloquer"}
+            aria-label="Bloquer le contact"
+          >
+            {messagingStore.isBlocked(activeConversation.id) ? "🚫" : "⊘"}
+          </button>
         {/if}
         <button
           class="icon-btn"
@@ -1126,6 +1135,12 @@
           {/each}
         </div>
       {/if}
+      {#if messagingStore.isBlocked(activeConversation.id)}
+        <div class="blocked-banner">
+          <span>Vous avez bloqué ce contact.</span>
+          <button class="link-btn" onclick={() => messagingStore.toggleBlock(activeConversation.id)}>Débloquer</button>
+        </div>
+      {:else}
       {#if replyingTo}
         <div class="reply-preview">
           <div class="reply-preview-body">
@@ -1157,6 +1172,7 @@
         >{recording ? "⏹" : "🎙"}</button>
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
+      {/if}
 
     {:else}
       <div class="empty-state">

@@ -68,6 +68,19 @@ export function createMessagingStore() {
   // Per-conversation mute (persisted). Muted threads suppress notifications.
   let muted = $state<Set<string>>(loadMuted());
 
+  let blocked = $state<Set<string>>(loadBlocked());
+  function loadBlocked(): Set<string> {
+    try {
+      const raw = localStorage.getItem("piccione.blocked");
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  }
+  function persistBlocked() {
+    try { localStorage.setItem("piccione.blocked", JSON.stringify([...blocked])); } catch { /* ignore */ }
+  }
+
   function loadMuted(): Set<string> {
     try {
       const raw = localStorage.getItem("piccione.muted");
@@ -99,6 +112,7 @@ export function createMessagingStore() {
   async function notifyInbound(conversationId: string, message: ChatMessage) {
     if (message.is_outgoing) return;
     if (muted.has(conversationId)) return;
+    if (blocked.has(conversationId)) return;
     if (typeof document !== "undefined" && document.hasFocus()) return;
     if (!notifyOk) await ensureNotifyPermission();
     if (!notifyOk) return;
@@ -379,6 +393,16 @@ export function createMessagingStore() {
     }
   }
 
+  function isBlocked(id: string): boolean {
+    return blocked.has(id);
+  }
+  function toggleBlock(id: string) {
+    if (blocked.has(id)) blocked.delete(id);
+    else blocked.add(id);
+    blocked = new Set(blocked);
+    persistBlocked();
+  }
+
   function isMuted(conversationId: string): boolean {
     return muted.has(conversationId);
   }
@@ -455,6 +479,11 @@ export function createMessagingStore() {
     },
     isMuted,
     toggleMute,
+    get blocked() {
+      return blocked;
+    },
+    isBlocked,
+    toggleBlock,
     fetchProfile,
     get pollVotes() {
       return pollVotes;
