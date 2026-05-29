@@ -75,3 +75,36 @@ mod backup_key_tests {
         let _ = derive_message_backup_key(&"0".repeat(64), aci);
     }
 }
+
+
+/// Open an encrypted Link-and-Sync transfer archive from in-memory `bytes`,
+/// decrypt + decompress + structurally validate it, and report how many
+/// unknown proto fields were seen (forward-compat signal). This is the
+/// `BackupReader` entry point the import path builds on; once this returns
+/// `Ok`, the next layer walks the frames into the presage store.
+///
+/// `Purpose::DeviceTransfer` matches the Link & Sync archive a primary
+/// produces (vs `RemoteBackup` for the SVR-B remote-backup tier).
+#[cfg(feature = "backups")]
+pub async fn validate_backup(
+    bytes: &[u8],
+    key: &libsignal_message_backup::key::MessageBackupKey,
+) -> Result<usize, String> {
+    use libsignal_message_backup::backup::Purpose;
+    use libsignal_message_backup::frame::CursorFactory;
+    use libsignal_message_backup::BackupReader;
+
+    let reader = BackupReader::new_encrypted_compressed(
+        key,
+        CursorFactory::new(bytes),
+        Purpose::DeviceTransfer,
+    )
+    .await
+    .map_err(|e| format!("open backup: {e}"))?;
+
+    let result = reader.validate_all().await;
+    result
+        .result
+        .map_err(|e| format!("backup validation failed: {e}"))?;
+    Ok(result.found_unknown_fields.len())
+}
