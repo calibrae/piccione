@@ -276,3 +276,18 @@ pub async fn fetch_profile(app: AppHandle, uuid: String) -> Result<Option<String
     let state = app.state::<AppState>();
     state.messaging.fetch_profile(parsed).await
 }
+
+/// Update our own profile display name (+ optional about).
+#[tauri::command]
+pub async fn set_profile(
+    app: AppHandle,
+    given_name: String,
+    family_name: Option<String>,
+    about: Option<String>,
+) -> Result<(), String> {
+    if given_name.trim().is_empty() {
+        return Err("le prénom ne peut pas être vide".into());
+    }
+    let state = app.state::<AppState>();
+    state.messaging.set_profile(given_name, family_name, about).await
+}

@@ -77,6 +77,13 @@ enum SendRequest {
         uuid: Uuid,
         reply: oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Update our own profile (display name + optional about).
+    UpdateProfile {
+        given_name: String,
+        family_name: Option<String>,
+        about: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Typing indicator (start/stop) for a 1:1 conversation. Fire-and-forget.
     Typing {
         conversation_id: String,
@@ -385,6 +392,27 @@ impl MessagingService {
                 started,
             });
         }
+    }
+
+    /// Set our own profile display name (and optional about line).
+    pub async fn set_profile(
+        &self,
+        given_name: String,
+        family_name: Option<String>,
+        about: Option<String>,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::UpdateProfile {
+            given_name,
+            family_name,
+            about,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "update profile reply dropped".to_string())?
     }
 
     /// Fetch a contact's profile from the service (network), cache it in the
@@ -1040,6 +1068,23 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
                 Ok(None) => Ok(None),
                 Err(e) => Err(format!("no profile key: {e}")),
             };
+            let _ = reply.send(result);
+        }
+        SendRequest::UpdateProfile {
+            given_name,
+            family_name,
+            about,
+            reply,
+        } => {
+            use presage::libsignal_service::profile_name::ProfileName;
+            let name = ProfileName {
+                given_name,
+                family_name: family_name.filter(|f| !f.trim().is_empty()),
+            };
+            let result = mgr
+                .update_profile(name, about.filter(|a| !a.trim().is_empty()), None)
+                .await
+                .map_err(|e| format!("failed to update profile: {e}"));
             let _ = reply.send(result);
         }
     }
