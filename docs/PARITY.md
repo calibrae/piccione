@@ -56,6 +56,22 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 11 (merged to main)
+
+- ✅ Local block / unblock (hide, suppress, block composer)
+- ✅ Group-call-update system messages
+
+**32 features merged. Coverage ~12 → ~39 of ~210.** The entire DataMessage-level
+surface is now covered. What remains is genuinely codec/subsystem work with no
+Rust implementation in the stack:
+
+| True Tier B (multi-week each) | Why |
+|---|---|
+| Backups.proto / Link & Sync history backfill | the history-on-link Cali saw — needs the backup codec written in Rust |
+| Group v2 create / rename / membership | zkgroup credential + group-v2 mutation ops, partly upstream |
+| Stories | separate StoryMessage subsystem + distribution lists + expiry |
+| Pinned messages | DataMessage-level but needs a pinned-state model (achievable next) |
+
 ## Shipped — wave 10 (merged to main) — first Tier-B features
 
 - ✅ **Polls** (render + vote + live tally) — turned out to be DataMessage fields (pollCreate/pollVote), not a codec, so achievable with the standard pattern.
