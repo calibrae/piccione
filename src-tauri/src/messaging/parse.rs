@@ -360,6 +360,17 @@ pub(crate) fn push_data_message_modifiers(
             message_id: ts.to_string(),
         }));
     }
+
+    if let Some(pv) = &dm.poll_vote {
+        if let Some(ts) = pv.target_sent_timestamp {
+            out.push(InboundEvent::PollVote(crate::messaging::types::PollVoteEvent {
+                chat_id: chat_id.to_string(),
+                poll_id: ts.to_string(),
+                voter_id: sender_id.to_string(),
+                option_indexes: pv.option_indexes.clone(),
+            }));
+        }
+    }
 }
 
 pub(crate) fn build_edit_event(

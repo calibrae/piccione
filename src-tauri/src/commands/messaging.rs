@@ -299,3 +299,19 @@ pub async fn get_safety_number(app: AppHandle, uuid: String) -> Result<String, S
     let state = app.state::<AppState>();
     state.messaging.safety_number(parsed).await
 }
+
+/// Cast a vote on a poll message.
+#[tauri::command]
+pub async fn vote_poll(
+    app: AppHandle,
+    conversation_id: String,
+    target_author_uuid: String,
+    target_timestamp: u64,
+    option_indexes: Vec<u32>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .vote_poll(&conversation_id, &target_author_uuid, target_timestamp, option_indexes)
+        .await
+}
