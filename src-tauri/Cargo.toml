@@ -68,6 +68,7 @@ log = { version = "0.4", optional = true }  # ringrtc::webrtc::logging::set_logg
 # behaviour returns pages to the OS, cutting steady-state RSS by ~30-50%.
 mimalloc = { version = "0.1", default-features = false }
 tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
 
 [dev-dependencies]
 mockall = "0.13"

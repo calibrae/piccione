@@ -7,6 +7,9 @@ pub struct Conversation {
     pub last_message: Option<String>,
     pub last_timestamp: u64,
     pub is_group: bool,
+    /// Absolute path to a cached avatar image, if one is known locally.
+    /// The frontend loads it via `convertFileSrc`. `None` → render initials.
+    pub avatar_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +40,60 @@ pub struct MediaItem {
     pub attachment: AttachmentInfo,
 }
 
+/// A linked device on the account, for the "Linked devices" view.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceDto {
+    pub id: u32,
+    pub name: Option<String>,
+    /// Epoch-ms timestamps for the frontend to format.
+    pub created_at: i64,
+    pub last_seen: i64,
+    /// True for the device this client is running as.
+    pub is_current: bool,
+}
+
+/// A reply target as shown in the UI — the snippet of the message being
+/// quoted. Built from `DataMessage.quote`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QuotedMessage {
+    /// Sent-timestamp of the original message (its stable id).
+    pub id: u64,
+    pub author_id: String,
+    pub author_name: String,
+    pub text: String,
+}
+
+/// A reply the user is composing — fed back into the send path to populate
+/// `DataMessage.quote`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct QuoteInput {
+    pub id: u64,
+    pub author_uuid: String,
+    pub text: String,
+}
+
+/// A link preview attached to a message (DataMessage.preview). Image is
+/// omitted for now — url/title/description render a clean card.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: String,
+    pub description: String,
+}
+
+/// A formatting/mention span over a message body (DataMessage.bodyRanges).
+/// `start`/`length` are UTF-16 code-unit offsets (so the frontend can apply
+/// them directly to a JS string). Exactly one of `style`/`mention_uuid` is set.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MsgRange {
+    pub start: u32,
+    pub length: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_uuid: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -45,6 +102,13 @@ pub struct ChatMessage {
     pub body: Option<String>,
     pub attachments: Vec<AttachmentInfo>,
     pub is_outgoing: bool,
+    /// Set when this message replies to another (DataMessage.quote).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<QuotedMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<LinkPreview>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub body_ranges: Vec<MsgRange>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -170,6 +234,7 @@ mod tests {
             last_message: Some("Hello".to_string()),
             last_timestamp: 1700000000000,
             is_group: false,
+            avatar_path: None,
         };
         let json = serde_json::to_value(&conv).unwrap();
         assert_eq!(json["name"], "Alice");
@@ -185,6 +250,9 @@ mod tests {
             body: Some("Hi there".to_string()),
             attachments: vec![],
             is_outgoing: false,
+            quote: None,
+            previews: vec![],
+            body_ranges: vec![],
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -324,6 +392,9 @@ mod tests {
                 body: Some("hi".to_string()),
                 attachments: vec![],
                 is_outgoing: false,
+                quote: None,
+                previews: vec![],
+                body_ranges: vec![],
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

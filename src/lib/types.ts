@@ -21,6 +21,27 @@ export interface Conversation {
   last_message: string | null;
   last_timestamp: number;
   is_group: boolean;
+  avatar_path: string | null;
+}
+
+export interface QuotedMessage {
+  id: number;
+  author_id: string;
+  author_name: string;
+  text: string;
+}
+
+export interface LinkPreview {
+  url: string;
+  title: string;
+  description: string;
+}
+
+export interface MsgRange {
+  start: number;
+  length: number;
+  style?: string;
+  mention_uuid?: string;
 }
 
 export interface ChatMessage {
@@ -30,4 +51,7 @@ export interface ChatMessage {
   body: string | null;
   attachments: AttachmentInfo[];
   is_outgoing: boolean;
+  quote?: QuotedMessage;
+  previews?: LinkPreview[];
+  body_ranges?: MsgRange[];
 }

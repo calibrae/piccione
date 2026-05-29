@@ -78,6 +78,7 @@ pub async fn send_message_with_attachments(
     conversation_id: String,
     body: String,
     file_paths: Vec<String>,
+    quote: Option<crate::messaging::types::QuoteInput>,
 ) -> Result<(), String> {
     info!(
         "send_message_with_attachments: {} files to {}",
@@ -87,7 +88,7 @@ pub async fn send_message_with_attachments(
     let state = app.state::<AppState>();
     let result = state
         .messaging
-        .send_message_with_attachments(&conversation_id, &body, file_paths)
+        .send_message_with_attachments(&conversation_id, &body, file_paths, quote)
         .await;
     match &result {
         Ok(()) => info!("send with attachments succeeded"),
@@ -198,4 +199,50 @@ pub async fn save_pasted_image(
     std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
 
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// Send or remove an emoji reaction to a message.
+#[tauri::command]
+pub async fn send_reaction(
+    app: AppHandle,
+    conversation_id: String,
+    target_author_uuid: String,
+    target_timestamp: u64,
+    emoji: String,
+    remove: bool,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .send_reaction(
+            &conversation_id,
+            &target_author_uuid,
+            target_timestamp,
+            &emoji,
+            remove,
+        )
+        .await
+}
+
+/// Delete-for-everyone a message you previously sent.
+#[tauri::command]
+pub async fn delete_for_everyone(
+    app: AppHandle,
+    conversation_id: String,
+    target_timestamp: u64,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .send_delete(&conversation_id, target_timestamp)
+        .await
+}
+
+/// List the account's linked devices (read-only).
+#[tauri::command]
+pub async fn list_devices(
+    app: AppHandle,
+) -> Result<Vec<crate::messaging::types::DeviceDto>, String> {
+    let state = app.state::<AppState>();
+    state.messaging.list_devices().await
 }

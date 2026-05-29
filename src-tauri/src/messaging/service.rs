@@ -34,6 +34,7 @@ enum SendRequest {
         conversation_id: String,
         body: String,
         file_paths: Vec<String>,
+        quote: Option<crate::messaging::types::QuoteInput>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Send a ReceiptMessage (DELIVERY / READ / VIEWED) back to the sender of
@@ -51,6 +52,25 @@ enum SendRequest {
     CallMessage {
         recipient_uuid: Uuid,
         call_message: presage::libsignal_service::proto::CallMessage,
+    },
+    /// Send (or remove) an emoji reaction to a message in a conversation.
+    Reaction {
+        conversation_id: String,
+        target_author_uuid: String,
+        target_timestamp: u64,
+        emoji: String,
+        remove: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Delete-for-everyone: retract a previously-sent message.
+    Delete {
+        conversation_id: String,
+        target_timestamp: u64,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// List the account's linked devices (read-only).
+    ListDevices {
+        reply: oneshot::Sender<Result<Vec<crate::messaging::types::DeviceDto>, String>>,
     },
 }
 
@@ -288,16 +308,17 @@ impl MessagingService {
 
     /// Send a text message via the channel to the messaging thread.
     pub async fn send_message(&self, conversation_id: &str, body: &str) -> Result<(), String> {
-        self.send_message_with_attachments(conversation_id, body, vec![])
+        self.send_message_with_attachments(conversation_id, body, vec![], None)
             .await
     }
 
-    /// Send a message with optional attachments via the channel.
+    /// Send a message with optional attachments and an optional reply quote.
     pub async fn send_message_with_attachments(
         &self,
         conversation_id: &str,
         body: &str,
         file_paths: Vec<String>,
+        quote: Option<crate::messaging::types::QuoteInput>,
     ) -> Result<(), String> {
         let tx_guard = self.send_tx.lock().await;
         let tx = tx_guard.as_ref().ok_or("messaging not started")?;
@@ -307,6 +328,7 @@ impl MessagingService {
             conversation_id: conversation_id.to_string(),
             body: body.to_string(),
             file_paths,
+            quote,
             reply: reply_tx,
         })
         .map_err(|_| "send channel closed".to_string())?;
@@ -316,6 +338,62 @@ impl MessagingService {
         reply_rx
             .await
             .map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Send (or remove) an emoji reaction to a target message.
+    pub async fn send_reaction(
+        &self,
+        conversation_id: &str,
+        target_author_uuid: &str,
+        target_timestamp: u64,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Reaction {
+            conversation_id: conversation_id.to_string(),
+            target_author_uuid: target_author_uuid.to_string(),
+            target_timestamp,
+            emoji: emoji.to_string(),
+            remove,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// List the account's linked devices (read-only — unlinking requires the
+    /// primary phone).
+    pub async fn list_devices(&self) -> Result<Vec<crate::messaging::types::DeviceDto>, String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::ListDevices { reply: reply_tx })
+            .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "list devices reply dropped".to_string())?
+    }
+
+    /// Delete-for-everyone a message you sent.
+    pub async fn send_delete(
+        &self,
+        conversation_id: &str,
+        target_timestamp: u64,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Delete {
+            conversation_id: conversation_id.to_string(),
+            target_timestamp,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "send reply dropped".to_string())?
     }
 
     /// Send a receipt (DELIVERY / READ / VIEWED) back to a recipient for one
@@ -361,6 +439,12 @@ impl MessagingService {
 
         let mut conversations = Vec::new();
         let self_aci = self.self_aci.lock().await.clone();
+        // Avatars cache lives next to the DB: <app_data>/avatars/.
+        let avatars_dir = self
+            .db_path
+            .parent()
+            .map(|p| p.join("avatars"))
+            .unwrap_or_else(|| std::path::PathBuf::from("avatars"));
 
         let contacts = store
             .contacts()
@@ -392,12 +476,18 @@ impl MessagingService {
             let thread = presage::store::Thread::Contact(service_id);
             let (last_message, last_timestamp) = get_last_message_info(&store, &thread).await;
 
+            // Contact avatars arrive with the contact sync — purely local bytes.
+            let avatar_path = contact.avatar.as_ref().and_then(|a| {
+                cache_avatar(&avatars_dir, &format!("c-{uuid_str}"), &a.content_type, &a.reader)
+            });
+
             conversations.push(Conversation {
                 id: uuid_str,
                 name,
                 last_message,
                 last_timestamp,
                 is_group: false,
+                avatar_path,
             });
         }
 
@@ -412,12 +502,19 @@ impl MessagingService {
             let thread = presage::store::Thread::Group(master_key);
             let (last_message, last_timestamp) = get_last_message_info(&store, &thread).await;
 
+            // Group avatars are cached locally by presage after group sync.
+            let avatar_path = match store.group_avatar(master_key).await {
+                Ok(Some(bytes)) => cache_avatar(&avatars_dir, &format!("g-{id}"), "image/jpeg", &bytes),
+                _ => None,
+            };
+
             conversations.push(Conversation {
                 id,
                 name: group.title,
                 last_message,
                 last_timestamp,
                 is_group: true,
+                avatar_path,
             });
         }
 
@@ -709,10 +806,11 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             conversation_id,
             body,
             file_paths,
+            quote,
             reply,
         } => {
             info!("processing send to {}", conversation_id);
-            let result = do_send(mgr, &conversation_id, &body, &file_paths).await;
+            let result = do_send(mgr, &conversation_id, &body, &file_paths, quote).await;
             if let Err(ref e) = result {
                 error!("send failed: {}", e);
             } else {
@@ -747,6 +845,62 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             if let Err(e) = do_send_call_message(mgr, recipient_uuid, call_message).await {
                 error!("call message send failed: {}", e);
             }
+        }
+        SendRequest::Reaction {
+            conversation_id,
+            target_author_uuid,
+            target_timestamp,
+            emoji,
+            remove,
+            reply,
+        } => {
+            let result = do_send_reaction(
+                mgr,
+                &conversation_id,
+                &target_author_uuid,
+                target_timestamp,
+                &emoji,
+                remove,
+            )
+            .await;
+            if let Err(ref e) = result {
+                error!("reaction send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
+        SendRequest::Delete {
+            conversation_id,
+            target_timestamp,
+            reply,
+        } => {
+            let result = do_send_delete(mgr, &conversation_id, target_timestamp).await;
+            if let Err(ref e) = result {
+                error!("delete send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
+        SendRequest::ListDevices { reply } => {
+            let current = mgr.registration_data().device_id;
+            let result = mgr
+                .devices()
+                .await
+                .map_err(|e| format!("failed to list devices: {e}"))
+                .map(|devices| {
+                    devices
+                        .into_iter()
+                        .map(|d| {
+                            let id = u32::from(d.id);
+                            crate::messaging::types::DeviceDto {
+                                id,
+                                name: d.name,
+                                created_at: d.created_at.timestamp_millis(),
+                                last_seen: d.last_seen.timestamp_millis(),
+                                is_current: Some(id) == current,
+                            }
+                        })
+                        .collect()
+                });
+            let _ = reply.send(result);
         }
     }
 }
@@ -805,11 +959,83 @@ async fn do_send_receipt(
         .map_err(|e| format!("send_receipt: {}", e))
 }
 
+/// Send a `DataMessage.reaction` (add or remove) to the target message's
+/// thread. `target_author_uuid` is the ACI of the message being reacted to.
+/// Send a `DataMessage.delete` (delete-for-everyone) for a message we sent.
+async fn do_send_delete(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_timestamp: u64,
+) -> Result<(), String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        delete: Some(Delete {
+            target_sent_timestamp: Some(target_timestamp),
+        }),
+        ..Default::default()
+    };
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send delete: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group delete: {e}")),
+    }
+}
+
+async fn do_send_reaction(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_author_uuid: &str,
+    target_timestamp: u64,
+    emoji: &str,
+    remove: bool,
+) -> Result<(), String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+
+    let reaction = Reaction {
+        emoji: Some(emoji.to_string()),
+        remove: Some(remove),
+        target_author_aci: Some(target_author_uuid.to_string()),
+        target_sent_timestamp: Some(target_timestamp),
+        ..Default::default()
+    };
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        reaction: Some(reaction),
+        ..Default::default()
+    };
+
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send reaction: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group reaction: {e}")),
+    }
+}
+
 async fn do_send(
     mgr: &mut Manager<SqliteStore, Registered>,
     conversation_id: &str,
     body: &str,
     file_paths: &[String],
+    quote: Option<crate::messaging::types::QuoteInput>,
 ) -> Result<(), String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -871,12 +1097,24 @@ async fn do_send(
         Some(body.to_string())
     };
 
+    // Build DataMessage.quote from the reply target, if any.
+    let quote_proto = quote.map(|q| {
+        use presage::libsignal_service::proto::data_message::Quote;
+        Quote {
+            id: Some(q.id),
+            author_aci: Some(q.author_uuid),
+            text: Some(q.text),
+            ..Default::default()
+        }
+    });
+
     match thread {
         presage::store::Thread::Contact(service_id) => {
             let data_message = DataMessage {
                 body: body_opt,
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
+                quote: quote_proto,
                 ..Default::default()
             };
             mgr.send_message(service_id, data_message, timestamp)
@@ -888,6 +1126,7 @@ async fn do_send(
                 body: body_opt,
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
+                quote: quote_proto,
                 ..Default::default()
             };
             mgr.send_message_to_group(&master_key, data_message, timestamp)
@@ -965,6 +1204,30 @@ async fn download_attachments(
     }
 }
 
+/// Write avatar `bytes` to `<dir>/<key>.<ext>` once and return the absolute
+/// path. `key` must be filename-safe (uuid or hex group id). Re-uses an
+/// existing file (avatars are immutable enough for the session). Returns
+/// `None` on any IO error — a missing avatar just falls back to initials.
+fn cache_avatar(dir: &std::path::Path, key: &str, content_type: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let ext = match content_type {
+        t if t.contains("png") => "png",
+        t if t.contains("webp") => "webp",
+        t if t.contains("gif") => "gif",
+        _ => "jpg",
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return None;
+    }
+    let path = dir.join(format!("{key}.{ext}"));
+    if !path.exists() && std::fs::write(&path, bytes).is_err() {
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
 async fn get_last_message_info(
     store: &SqliteStore,
     thread: &presage::store::Thread,
@@ -1005,6 +1268,29 @@ async fn resolve_sender_name(
         return pick_sender_name(None, sender_uuid_str);
     };
     let service_id = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from(uuid));
+
+    // 1. A saved contact with a name wins.
+    if let Ok(Some(contact)) = store.contact_by_id(&service_id).await {
+        if !contact.name.is_empty() {
+            return contact.name.clone();
+        }
+    }
+
+    // 2. Fall back to a synced/fetched profile name (covers group members who
+    //    aren't saved contacts — the usual "raw UUID in a group" case). Purely
+    //    a local store read; no network.
+    if let Ok(Some(key)) = store.profile_key(&service_id).await {
+        if let Ok(Some(profile)) = store.profile(uuid, key).await {
+            if let Some(name) = profile.name {
+                let joined = name.to_string();
+                if !joined.trim().is_empty() {
+                    return joined;
+                }
+            }
+        }
+    }
+
+    // 3. Phone number, else a short ~uuid handle.
     match store.contact_by_id(&service_id).await {
         Ok(contact_opt) => pick_sender_name(contact_opt.as_ref(), sender_uuid_str),
         Err(_) => pick_sender_name(None, sender_uuid_str),

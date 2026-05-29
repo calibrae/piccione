@@ -2,8 +2,10 @@
   import { onMount } from "svelte";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { messagingStore } from "../stores/messaging.svelte";
+  import type { ChatMessage } from "../types";
   import { settingsStore } from "../stores/settings.svelte";
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
@@ -20,6 +22,8 @@
   let showUuidInput = $state(false);
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
+  let replyingTo = $state<ChatMessage | null>(null);
+  let convoSearch = $state("");
 
   onMount(async () => {
     await settingsStore.load();
@@ -32,7 +36,13 @@
 
   async function selectConversation(id: string) {
     messagingStore.activeConversationId = id;
+    messagingStore.markRead(id);
     showNewMessage = false;
+    try {
+      inputText = localStorage.getItem(draftKey(id)) ?? "";
+    } catch {
+      inputText = "";
+    }
     // Fire READ receipts for every inbound (not-outgoing) message in the
     // thread so the sender's client shows the blue double-check.
     await messagingStore.loadMessages(id);
@@ -58,13 +68,22 @@
     const body = text;
     const files = [...pendingFiles];
     const convId = messagingStore.activeConversationId;
+    const quote = replyingTo
+      ? {
+          id: replyingTo.timestamp,
+          author_uuid: replyingTo.sender_id,
+          text: quoteSnippet(replyingTo),
+        }
+      : undefined;
     inputText = "";
     pendingFiles = [];
+    replyingTo = null;
+    try { localStorage.removeItem(draftKey(convId)); } catch { /* ignore */ }
 
     // Don't block the UI — fire and forget.
     // Errors surface as toasts via the messaging store.
-    if (files.length > 0) {
-      messagingStore.sendMessageWithAttachments(convId, body, files).catch(() => {});
+    if (files.length > 0 || quote) {
+      messagingStore.sendMessageWithAttachments(convId, body, files, quote).catch(() => {});
     } else {
       messagingStore.sendMessage(convId, body);
     }
@@ -119,6 +138,44 @@
       // user can correct the recipient and try again.
     }
   }
+
+  function autosize(e: Event) {
+    const el = e.target as HTMLTextAreaElement;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 140) + "px";
+  }
+
+  function draftKey(id: string): string {
+    return `piccione.draft.${id}`;
+  }
+  // Persist the composer text per conversation so switching threads (or
+  // reloading) doesn't lose a half-typed message.
+  $effect(() => {
+    const id = messagingStore.activeConversationId;
+    if (!id) return;
+    const text = inputText;
+    try {
+      if (text) localStorage.setItem(draftKey(id), text);
+      else localStorage.removeItem(draftKey(id));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // Reflect total unread on the dock/taskbar badge. Guarded so it no-ops
+  // outside the Tauri runtime (e.g. vitest/jsdom).
+  $effect(() => {
+    let total = 0;
+    for (const n of messagingStore.unread.values()) total += n;
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    try {
+      getCurrentWindow()
+        .setBadgeCount(total > 0 ? total : undefined)
+        .catch(() => {});
+    } catch {
+      /* not in a Tauri window */
+    }
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -200,10 +257,48 @@
     showUuidInput = false;
   }
 
+  let filteredConversations = $derived(
+    messagingStore.conversations.filter((c) => {
+      const q = convoSearch.trim().toLowerCase();
+      return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
+    })
+  );
+
+  function dayLabel(ts: number): string {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((startOf(now) - startOf(d)) / 86400000);
+    if (days === 0) return "Aujourd'hui";
+    if (days === 1) return "Hier";
+    if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+    return d.toLocaleDateString([], { day: "numeric", month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+  }
+  // Show a sender name above an incoming group message when the sender
+  // changes (so runs from one person aren't repeatedly labelled).
+  function showSender(i: number): boolean {
+    if (!activeConversation?.is_group) return false;
+    const cur = activeMessages[i];
+    if (cur.is_outgoing) return false;
+    if (i === 0) return true;
+    const prev = activeMessages[i - 1];
+    return prev.is_outgoing || prev.sender_id !== cur.sender_id || isNewDay(i);
+  }
+
+  // Index of messages that start a new day (for inserting a separator before).
+  function isNewDay(i: number): boolean {
+    if (i === 0) return true;
+    const prev = activeMessages[i - 1];
+    const cur = activeMessages[i];
+    return new Date(prev.timestamp).toDateString() !== new Date(cur.timestamp).toDateString();
+  }
+
   let activeMessages = $derived(
-    messagingStore.activeConversationId
+    (messagingStore.activeConversationId
       ? messagingStore.getMessages(messagingStore.activeConversationId)
       : []
+    ).filter((m) => !messagingStore.deletions.has(String(m.timestamp)))
   );
 
   // Auto-scroll when messages change. messagesContainer is now $state-tracked,
@@ -223,6 +318,102 @@
       (c) => c.id === messagingStore.activeConversationId
     )
   );
+
+  function startReply(msg: ChatMessage) {
+    replyingTo = msg;
+  }
+  function cancelReply() {
+    replyingTo = null;
+  }
+  function quoteSnippet(msg: ChatMessage): string {
+    if (msg.body) return msg.body;
+    if (msg.attachments?.length) return "📎 " + (msg.attachments[0].file_name || "pièce jointe");
+    return "";
+  }
+
+  const QUICK_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+  let reactingTo = $state<number | null>(null);
+
+  function reactionsFor(msg: ChatMessage): { emoji: string; count: number; mine: boolean }[] {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return [];
+    const perMsg = messagingStore.reactions.get(cid)?.get(String(msg.timestamp));
+    if (!perMsg) return [];
+    const me = messagingStore.selfId ?? "";
+    const counts = new Map<string, { count: number; mine: boolean }>();
+    for (const [sender, emoji] of perMsg) {
+      if (!emoji) continue;
+      const c = counts.get(emoji) ?? { count: 0, mine: false };
+      c.count += 1;
+      if (sender === me) c.mine = true;
+      counts.set(emoji, c);
+    }
+    return [...counts.entries()].map(([emoji, c]) => ({ emoji, ...c }));
+  }
+
+  function myReaction(msg: ChatMessage): string | null {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return null;
+    const me = messagingStore.selfId ?? "";
+    return messagingStore.reactions.get(cid)?.get(String(msg.timestamp))?.get(me) ?? null;
+  }
+
+  function toggleReaction(msg: ChatMessage, emoji: string) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return;
+    reactingTo = null;
+    const mine = myReaction(msg);
+    // Tapping your current emoji removes it; otherwise (re)set to the new one.
+    const remove = mine === emoji;
+    messagingStore.sendReaction(cid, msg.sender_id, msg.timestamp, emoji, remove);
+  }
+
+  interface BodySeg { text: string; styles: string[]; mention: string | null; }
+  function resolveMention(uuid: string): string {
+    const c = messagingStore.conversations.find((x) => x.id === uuid && !x.is_group);
+    return c ? c.name : "utilisateur";
+  }
+  // Build display segments from a body + its bodyRanges. start/length are
+  // UTF-16 offsets, matching JS string indexing.
+  function bodySegments(text: string, ranges: import("../types").MsgRange[]): BodySeg[] {
+    const bounds = new Set<number>([0, text.length]);
+    for (const r of ranges) {
+      bounds.add(Math.min(r.start, text.length));
+      bounds.add(Math.min(r.start + r.length, text.length));
+    }
+    const points = [...bounds].filter((n) => n >= 0 && n <= text.length).sort((a, b) => a - b);
+    const segs: BodySeg[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      if (b <= a) continue;
+      const styles: string[] = [];
+      let mention: string | null = null;
+      for (const r of ranges) {
+        if (r.start <= a && r.start + r.length >= b) {
+          if (r.style) styles.push(r.style);
+          if (r.mention_uuid) mention = r.mention_uuid;
+        }
+      }
+      segs.push({ text: text.slice(a, b), styles, mention });
+    }
+    return segs;
+  }
+
+  async function copyMessage(msg: ChatMessage) {
+    if (!msg.body) return;
+    try {
+      await navigator.clipboard.writeText(msg.body);
+    } catch (e) {
+      console.error("copy failed:", e);
+    }
+  }
+  function deleteMessage(msg: ChatMessage) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return;
+    if (!confirm("Supprimer ce message pour tout le monde ?")) return;
+    messagingStore.deleteForEveryone(cid, msg.timestamp);
+  }
 
   function openLightbox(src: string) {
     lightboxSrc = src;
@@ -309,6 +500,14 @@
   }
 </script>
 
+{#snippet avatarEl(name: string, path: string | null, extra: string)}
+  {#if path}
+    <img class="avatar {extra}" src={convertFileSrc(path)} alt={name} />
+  {:else}
+    <div class="avatar {extra}">{name[0]?.toUpperCase() ?? "?"}</div>
+  {/if}
+{/snippet}
+
 <div class="layout">
   <aside class="sidebar">
     <div class="sidebar-header">
@@ -327,6 +526,9 @@
         </button>
       </div>
     </div>
+    <div class="convo-search">
+      <input type="text" placeholder="Rechercher…" bind:value={convoSearch} aria-label="Rechercher une conversation" />
+    </div>
     <div class="conversations">
       {#if messagingStore.conversations.length === 0}
         <div class="empty-conversations">
@@ -337,19 +539,24 @@
           </div>
         </div>
       {:else}
-        {#each messagingStore.conversations as convo}
+        {#each filteredConversations as convo}
           <button
             class="conversation"
             class:active={messagingStore.activeConversationId === convo.id}
             onclick={() => selectConversation(convo.id)}
           >
-            <div class="avatar">{convo.name[0]?.toUpperCase() ?? "?"}</div>
+            {@render avatarEl(convo.name, convo.avatar_path, "")}
             <div class="convo-info">
               <div class="convo-top">
                 <span class="convo-name">{convo.name}</span>
                 <span class="convo-time">{formatTime(convo.last_timestamp)}</span>
               </div>
-              <div class="convo-last">{convo.last_message ?? ""}</div>
+              <div class="convo-bottom">
+                <span class="convo-last">{convo.last_message ?? ""}</span>
+                {#if (messagingStore.unread.get(convo.id) ?? 0) > 0}
+                  <span class="unread-badge">{messagingStore.unread.get(convo.id)}</span>
+                {/if}
+              </div>
             </div>
           </button>
         {/each}
@@ -367,7 +574,7 @@
           <label for="contact-search">Destinataire</label>
           {#if pickedContact}
             <div class="picked-contact">
-              <div class="avatar small">{pickedContact.name[0]?.toUpperCase() ?? "?"}</div>
+              {@render avatarEl(pickedContact.name, pickedContact.avatar_path, "small")}
               <div class="picked-info">
                 <div class="picked-name">{pickedContact.name}</div>
                 <div class="picked-uuid">{pickedContact.id}</div>
@@ -437,6 +644,7 @@
 
     {:else if activeConversation}
       <div class="chat-header">
+        {@render avatarEl(activeConversation.name, activeConversation.avatar_path, "small")}
         <h2>{activeConversation.name}</h2>
         {#if !activeConversation.is_group}
           <button
@@ -463,9 +671,58 @@
         </button>
       </div>
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
-        {#each activeMessages as msg}
+        {#each activeMessages as msg, i}
+          {#if isNewDay(i)}
+            <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
+          {/if}
           <div class="message" class:outgoing={msg.is_outgoing}>
+            {#if showSender(i)}
+              <span class="sender-label">{msg.sender_name}</span>
+            {/if}
+            <div class="msg-actions">
+              <button
+                class="reply-action"
+                title="Réagir"
+                aria-label="Réagir"
+                onclick={() => (reactingTo = reactingTo === msg.timestamp ? null : msg.timestamp)}
+              >☺</button>
+              <button
+                class="reply-action"
+                title="Répondre"
+                aria-label="Répondre"
+                onclick={() => startReply(msg)}
+              >↩</button>
+              {#if msg.body}
+                <button
+                  class="reply-action"
+                  title="Copier"
+                  aria-label="Copier"
+                  onclick={() => copyMessage(msg)}
+                >⧉</button>
+              {/if}
+              {#if msg.is_outgoing}
+                <button
+                  class="reply-action"
+                  title="Supprimer pour tout le monde"
+                  aria-label="Supprimer"
+                  onclick={() => deleteMessage(msg)}
+                >🗑</button>
+              {/if}
+            </div>
+            {#if reactingTo === msg.timestamp}
+              <div class="emoji-picker">
+                {#each QUICK_EMOJI as e}
+                  <button class="emoji-opt" onclick={() => toggleReaction(msg, e)}>{e}</button>
+                {/each}
+              </div>
+            {/if}
             <div class="bubble">
+              {#if msg.quote}
+                <div class="quote-bar">
+                  <span class="quote-author">{msg.quote.author_name}</span>
+                  <span class="quote-text">{msg.quote.text}</span>
+                </div>
+              {/if}
               {#if msg.attachments && msg.attachments.length > 0}
                 <div class="attachments">
                   {#each msg.attachments as att}
@@ -510,18 +767,43 @@
               {/if}
               {#if msg.body}
                 <p>
-                  {#each linkify(msg.body) as seg}
-                    {#if seg.href}
-                      <a
-                        href={seg.href}
-                        class="msg-link"
-                        onclick={(e) => {
-                          e.preventDefault();
-                          openExternal(seg.href!);
-                        }}>{seg.text}</a>
-                    {:else}{seg.text}{/if}
-                  {/each}
+                  {#if msg.body_ranges && msg.body_ranges.length > 0}
+                    {#each bodySegments(msg.body, msg.body_ranges) as seg}
+                      {#if seg.mention}<span class="mention">@{resolveMention(seg.mention)}</span>{:else}<span
+                          class:fmt-bold={seg.styles.includes("bold")}
+                          class:fmt-italic={seg.styles.includes("italic")}
+                          class:fmt-strike={seg.styles.includes("strikethrough")}
+                          class:fmt-mono={seg.styles.includes("monospace")}
+                          class:fmt-spoiler={seg.styles.includes("spoiler")}
+                        >{seg.text}</span>{/if}
+                    {/each}
+                  {:else}
+                    {#each linkify(msg.body) as seg}
+                      {#if seg.href}
+                        <a
+                          href={seg.href}
+                          class="msg-link"
+                          onclick={(e) => {
+                            e.preventDefault();
+                            openExternal(seg.href!);
+                          }}>{seg.text}</a>
+                      {:else}{seg.text}{/if}
+                    {/each}
+                  {/if}
                 </p>
+              {/if}
+              {#if msg.previews && msg.previews.length > 0}
+                {#each msg.previews as prev}
+                  <button
+                    class="link-preview"
+                    onclick={() => openExternal(prev.url)}
+                    title={prev.url}
+                  >
+                    {#if prev.title}<span class="lp-title">{prev.title}</span>{/if}
+                    {#if prev.description}<span class="lp-desc">{prev.description}</span>{/if}
+                    <span class="lp-url">{prev.url}</span>
+                  </button>
+                {/each}
               {/if}
               <span class="msg-time">{formatTime(msg.timestamp)}</span>
               {#if msg.is_outgoing}
@@ -529,6 +811,17 @@
                 <span class="receipt receipt-{r}" title={r} aria-label={r}>
                   {#if r === "sent"}✓{:else}✓✓{/if}
                 </span>
+              {/if}
+              {#if reactionsFor(msg).length > 0}
+                <div class="reaction-chips">
+                  {#each reactionsFor(msg) as chip}
+                    <button
+                      class="reaction-chip"
+                      class:mine={chip.mine}
+                      onclick={() => toggleReaction(msg, chip.emoji)}
+                    >{chip.emoji}{#if chip.count > 1}<span class="rc-count">{chip.count}</span>{/if}</button>
+                  {/each}
+                </div>
               {/if}
             </div>
           </div>
@@ -544,17 +837,28 @@
           {/each}
         </div>
       {/if}
+      {#if replyingTo}
+        <div class="reply-preview">
+          <div class="reply-preview-body">
+            <span class="quote-author">{replyingTo.is_outgoing ? "Vous" : replyingTo.sender_name}</span>
+            <span class="quote-text">{quoteSnippet(replyingTo)}</span>
+          </div>
+          <button class="remove-file" onclick={cancelReply} aria-label="Annuler la réponse">&times;</button>
+        </div>
+      {/if}
       <div class="composer">
         <button class="attach-btn" onclick={handleAttachFile} title="Joindre un fichier">
           📎
         </button>
-        <input
-          type="text"
-          placeholder="Message…"
+        <textarea
+          class="composer-input"
+          rows="1"
+          placeholder="Message…  (Maj+Entrée = nouvelle ligne)"
           bind:value={inputText}
           onkeydown={handleKeydown}
           onpaste={handlePaste}
-        />
+          oninput={autosize}
+        ></textarea>
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
 
@@ -589,6 +893,235 @@
 {/if}
 
 <style>
+  .sender-label {
+    display: block;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--accent, #3b82f6);
+    margin: 2px 0 1px 2px;
+  }
+  .convo-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .unread-badge {
+    flex: 0 0 auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent, #3b82f6);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .composer-input {
+    flex: 1;
+    resize: none;
+    overflow-y: auto;
+    max-height: 140px;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.4;
+  }
+  .convo-search {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border, #27272a);
+  }
+  .convo-search input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border: 1px solid var(--border, #27272a);
+    border-radius: 8px;
+    background: var(--bg-primary, #0f0f1a);
+    color: var(--text-primary, #e4e4e7);
+    font-size: 0.85rem;
+  }
+  .day-sep {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0 6px;
+  }
+  .day-sep span {
+    font-size: 0.72rem;
+    color: var(--text-secondary, #a1a1aa);
+    background: rgba(127, 127, 127, 0.14);
+    padding: 2px 10px;
+    border-radius: 10px;
+    text-transform: capitalize;
+  }
+  .fmt-bold { font-weight: 700; }
+  .fmt-italic { font-style: italic; }
+  .fmt-strike { text-decoration: line-through; }
+  .fmt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  .fmt-spoiler {
+    background: var(--text-primary, #e4e4e7);
+    color: transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.1s, background 0.1s;
+  }
+  .fmt-spoiler:hover { background: rgba(127,127,127,0.25); color: inherit; }
+  .mention {
+    color: var(--accent, #3b82f6);
+    font-weight: 600;
+  }
+  .link-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    border: 1px solid var(--border, #27272a);
+    border-left: 3px solid var(--accent, #3b82f6);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-top: 4px;
+    background: rgba(127, 127, 127, 0.08);
+    cursor: pointer;
+    max-width: 320px;
+  }
+  .lp-title { font-weight: 600; font-size: 0.85rem; }
+  .lp-desc {
+    font-size: 0.8rem;
+    color: var(--text-secondary, #a1a1aa);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .lp-url { font-size: 0.72rem; color: var(--accent, #3b82f6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .quote-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding: 3px 8px;
+    margin-bottom: 4px;
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 4px;
+    max-width: 100%;
+  }
+  .quote-author {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent, #3b82f6);
+  }
+  .quote-text {
+    font-size: 0.82rem;
+    color: var(--text-secondary, #a1a1aa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 280px;
+  }
+  .message {
+    position: relative;
+  }
+  .msg-actions {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .message:not(.outgoing) .msg-actions {
+    right: -92px;
+  }
+  .message.outgoing .msg-actions {
+    left: -124px;
+  }
+  .message:hover .msg-actions {
+    opacity: 1;
+  }
+  .reply-action {
+    border: none;
+    background: var(--bg-secondary, #16213e);
+    color: var(--text-secondary, #a1a1aa);
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .emoji-picker {
+    position: absolute;
+    top: -6px;
+    z-index: 10;
+    display: flex;
+    gap: 2px;
+    padding: 4px 6px;
+    background: var(--bg-secondary, #16213e);
+    border: 1px solid var(--border, #27272a);
+    border-radius: 18px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+  .message:not(.outgoing) .emoji-picker { left: 0; }
+  .message.outgoing .emoji-picker { right: 0; }
+  .emoji-opt {
+    border: none;
+    background: transparent;
+    font-size: 1.15rem;
+    cursor: pointer;
+    border-radius: 50%;
+    padding: 2px 4px;
+  }
+  .emoji-opt:hover { background: rgba(127, 127, 127, 0.18); }
+  .reaction-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .reaction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border: 1px solid var(--border, #27272a);
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 12px;
+    padding: 1px 7px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  .reaction-chip.mine {
+    border-color: var(--accent, #3b82f6);
+    background: rgba(59, 130, 246, 0.18);
+  }
+  .rc-count { font-size: 0.72rem; color: var(--text-secondary, #a1a1aa); }
+  .reply-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-secondary, #16213e);
+    border-top: 1px solid var(--border, #27272a);
+  }
+  .reply-preview-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    flex: 1;
+    min-width: 0;
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding-left: 8px;
+  }
+  img.avatar {
+    object-fit: cover;
+    background: transparent;
+  }
+  .chat-header .avatar.small {
+    margin-right: 10px;
+  }
   .msg-link {
     color: var(--accent, #3b82f6);
     text-decoration: underline;

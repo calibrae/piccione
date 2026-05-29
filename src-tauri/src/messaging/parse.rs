@@ -91,6 +91,63 @@ pub(crate) fn extract_attachments(dm: &DataMessage) -> Vec<AttachmentInfo> {
         .collect()
 }
 
+/// Build a UI `QuotedMessage` from a `DataMessage.quote`. Author name is the
+/// raw uuid here; `enrich_sender_name`-style resolution can upgrade it later.
+fn extract_quote(dm: &DataMessage) -> Option<crate::messaging::types::QuotedMessage> {
+    let q = dm.quote.as_ref()?;
+    let author_id = q.author_aci.clone().unwrap_or_default();
+    Some(crate::messaging::types::QuotedMessage {
+        id: q.id.unwrap_or(0),
+        author_id: author_id.clone(),
+        author_name: author_id,
+        text: q.text.clone().unwrap_or_default(),
+    })
+}
+
+/// Build UI `LinkPreview`s from `DataMessage.preview`. Image previews are
+/// dropped for now; url/title/description render a card.
+fn extract_previews(dm: &DataMessage) -> Vec<crate::messaging::types::LinkPreview> {
+    dm.preview
+        .iter()
+        .filter_map(|p| {
+            let url = p.url.clone()?;
+            Some(crate::messaging::types::LinkPreview {
+                url,
+                title: p.title.clone().unwrap_or_default(),
+                description: p.description.clone().unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Map `DataMessage.bodyRanges` to UI `MsgRange`s (styles + mentions).
+fn extract_body_ranges(dm: &DataMessage) -> Vec<crate::messaging::types::MsgRange> {
+    use presage::libsignal_service::proto::body_range::{AssociatedValue, Style};
+    dm.body_ranges
+        .iter()
+        .filter_map(|r| {
+            let start = r.start?;
+            let length = r.length?;
+            let (style, mention_uuid) = match &r.associated_value {
+                Some(AssociatedValue::Style(s)) => {
+                    let name = match Style::try_from(*s).unwrap_or(Style::None) {
+                        Style::Bold => "bold",
+                        Style::Italic => "italic",
+                        Style::Spoiler => "spoiler",
+                        Style::Strikethrough => "strikethrough",
+                        Style::Monospace => "monospace",
+                        Style::None => return None,
+                    };
+                    (Some(name.to_string()), None)
+                }
+                Some(AssociatedValue::MentionAci(aci)) => (None, Some(aci.clone())),
+                _ => return None,
+            };
+            Some(crate::messaging::types::MsgRange { start, length, style, mention_uuid })
+        })
+        .collect()
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -119,6 +176,9 @@ pub(crate) fn content_to_chat_message(
                 body,
                 attachments,
                 is_outgoing,
+                quote: extract_quote(dm),
+                previews: extract_previews(dm),
+                body_ranges: extract_body_ranges(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -139,6 +199,9 @@ pub(crate) fn content_to_chat_message(
                         body,
                         attachments,
                         is_outgoing: true,
+                        quote: extract_quote(dm),
+                        previews: extract_previews(dm),
+                        body_ranges: extract_body_ranges(dm),
                     });
                 }
             }

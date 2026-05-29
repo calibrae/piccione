@@ -79,6 +79,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -180,6 +181,9 @@ pub fn run() {
             commands::messaging::mark_conversation_read,
             commands::messaging::get_conversation_media,
             commands::messaging::save_pasted_image,
+            commands::messaging::send_reaction,
+            commands::messaging::delete_for_everyone,
+            commands::messaging::list_devices,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,

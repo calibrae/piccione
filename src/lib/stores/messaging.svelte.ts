@@ -1,7 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import type { Conversation, ChatMessage } from "../types";
 import { toastStore } from "./toasts.svelte";
+
+export interface QuoteInput {
+  id: number;
+  author_uuid: string;
+  text: string;
+}
 
 // --- Modifier event payloads (mirror src-tauri/src/messaging/types.rs) ---
 
@@ -46,6 +57,38 @@ export function createMessagingStore() {
   let activeConversationId = $state<string | null>(null);
   let messages = $state<Map<string, ChatMessage[]>>(new Map());
   let selfId = $state<string | null>(null);
+  let notifyOk = false;
+  // Per-conversation unread counts (in-memory; resets on restart).
+  let unread = $state<Map<string, number>>(new Map());
+
+  async function ensureNotifyPermission() {
+    try {
+      notifyOk = await isPermissionGranted();
+      if (!notifyOk) notifyOk = (await requestPermission()) === "granted";
+    } catch {
+      notifyOk = false;
+    }
+  }
+
+  // Desktop notification for an inbound message when the window is not focused.
+  async function notifyInbound(conversationId: string, message: ChatMessage) {
+    if (message.is_outgoing) return;
+    if (typeof document !== "undefined" && document.hasFocus()) return;
+    if (!notifyOk) await ensureNotifyPermission();
+    if (!notifyOk) return;
+    const convo = conversations.find((c) => c.id === conversationId);
+    const title = convo?.name ?? message.sender_name ?? "Nouveau message";
+    const body = message.body
+      ? message.body.slice(0, 140)
+      : message.attachments?.length
+        ? "📎 Pièce jointe"
+        : "";
+    try {
+      sendNotification({ title, body });
+    } catch (e) {
+      console.error("notify failed:", e);
+    }
+  }
 
   // Modifier mirrors. The UI renderer is a separate swimlane — for now we
   // just keep the latest known state per conversation/message so that swarm
@@ -87,6 +130,11 @@ export function createMessagingStore() {
           const existing = messages.get(conversation_id) ?? [];
           messages.set(conversation_id, [...existing, message]);
           messages = new Map(messages);
+          if (!message.is_outgoing && conversation_id !== activeConversationId) {
+            unread.set(conversation_id, (unread.get(conversation_id) ?? 0) + 1);
+            unread = new Map(unread);
+          }
+          void notifyInbound(conversation_id, message);
         }
       ),
       listen("conversations-updated", () => {
@@ -210,20 +258,22 @@ export function createMessagingStore() {
   async function sendMessageWithAttachments(
     conversationId: string,
     body: string,
-    filePaths: string[]
+    filePaths: string[],
+    quote?: QuoteInput
   ) {
     try {
       await invoke("send_message_with_attachments", {
         conversationId,
         body,
         filePaths,
+        quote: quote ?? null,
       });
       await loadConversations();
       await loadMessages(conversationId);
     } catch (e) {
       console.error("Failed to send with attachments:", e);
       toastStore.error("Échec de l'envoi", () =>
-        sendMessageWithAttachments(conversationId, body, filePaths)
+        sendMessageWithAttachments(conversationId, body, filePaths, quote)
       );
       throw e;
     }
@@ -249,6 +299,56 @@ export function createMessagingStore() {
     }
   }
 
+  async function sendReaction(
+    conversationId: string,
+    targetAuthorUuid: string,
+    targetTimestamp: number,
+    emoji: string,
+    remove: boolean
+  ) {
+    try {
+      await invoke("send_reaction", {
+        conversationId,
+        targetAuthorUuid,
+        targetTimestamp,
+        emoji,
+        remove,
+      });
+      // Optimistic local update so the chip flips instantly.
+      const perChat = reactions.get(conversationId) ?? new Map();
+      const key = String(targetTimestamp);
+      const perMsg = perChat.get(key) ?? new Map();
+      const me = selfId ?? "";
+      if (remove) perMsg.delete(me);
+      else perMsg.set(me, emoji);
+      if (perMsg.size === 0) perChat.delete(key);
+      else perChat.set(key, perMsg);
+      reactions.set(conversationId, perChat);
+      reactions = new Map(reactions);
+    } catch (e) {
+      console.error("send_reaction failed:", e);
+    }
+  }
+
+  async function deleteForEveryone(conversationId: string, targetTimestamp: number) {
+    try {
+      await invoke("delete_for_everyone", { conversationId, targetTimestamp });
+      // Optimistically hide locally.
+      deletions.add(String(targetTimestamp));
+      deletions = new Set(deletions);
+    } catch (e) {
+      console.error("delete_for_everyone failed:", e);
+      toastStore.error("Échec de la suppression");
+    }
+  }
+
+  function markRead(conversationId: string) {
+    if (unread.has(conversationId)) {
+      unread.delete(conversationId);
+      unread = new Map(unread);
+    }
+  }
+
   return {
     get conversations() {
       return conversations;
@@ -265,6 +365,10 @@ export function createMessagingStore() {
     get selfId() {
       return selfId;
     },
+    get unread() {
+      return unread;
+    },
+    markRead,
     get receipts() {
       return receipts;
     },
@@ -294,6 +398,8 @@ export function createMessagingStore() {
     sendMessageWithAttachments,
     sendToRecipient,
     loadSelfId,
+    sendReaction,
+    deleteForEveryone,
   };
 }
 

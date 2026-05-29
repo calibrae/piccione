@@ -42,6 +42,7 @@ const conv: Conversation = {
   last_message: "hi",
   last_timestamp: Date.now(),
   is_group: false,
+  avatar_path: null,
 };
 
 function imageMessage(): ChatMessage {
@@ -87,6 +88,12 @@ function setupInvoke(messages: ChatMessage[]) {
     switch (cmd) {
       case "get_self_id":
         return Promise.resolve("self-uuid");
+      case "get_settings":
+        return Promise.resolve({
+          read_receipts: true,
+          typing_indicators: true,
+          theme: "auto",
+        });
       case "get_conversations":
         return Promise.resolve([conv]);
       case "get_messages":
@@ -115,6 +122,19 @@ async function selectConversation() {
 beforeEach(async () => {
   mockInvoke.mockReset();
   mockListen.mockReset();
+  // jsdom has no matchMedia; applyTheme("auto") needs it.
+  if (!window.matchMedia) {
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+  }
   // The store no longer registers listeners at module load — App.svelte
   // does that on mount. In ChatLayout-only tests we have to wire them up.
   await messagingStore.initListeners();
