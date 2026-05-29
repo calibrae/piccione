@@ -114,15 +114,35 @@ libsignal-service) resolves clean; its `proto` module is public only under the
 3.x** (`protobuf3` alias, `Message::parse_from_bytes`), NOT prost;
 `CompletedBackup` fields are private so import uses the raw frame loop.
 
-## Remaining (all [LIVE-TEST] — need a real encrypted transfer archive)
+## Implemented + validated (this session)
+
+Import side is **functional and unit-validated**:
+- `extract_backup`/`extract_from_reader` (reader-generic): single-pass frame
+  loop building id→ACI + id→Thread (Contact/Group) maps; reconstructs a
+  presage `Content` per 1:1 **and** group `StandardMessage` text item.
+- `import_backup` writes contacts (`save_contact`) + messages
+  (`save_message`) via a cloned `SqliteStore`.
+- `preview_backup` summarizes without importing; Settings "Sauvegarde" UI.
+- Tests: canonical-backup.binproto (decode) + a synthetic Recipient/Chat/
+  ChatItem stream (message reconstruction: thread/body/timestamp). 7 tests.
+
+## Remaining (need fork proto work and/or a live primary)
 
 1. **Frame→presage store mapping** — `Recipient::Contact`→`save_contact`,
    `::Group`→`save_group`; `ChatItem`→reconstruct `Content`/`DataMessage`→
    `save_message` (the hard part: edits/reactions/quotes/attachments fidelity).
    Compile-verifiable now; correctness needs a real archive.
-2. **Transfer-archive request** — `SyncMessage` request to the primary +
-   download; protobuf may need regenerating in libsignal-service-rs.
-3. **Import UI** — post-link "Importer l'historique" + progress.
+2. **Transfer-archive request (BLOCKED on proto)** — confirmed the
+   transfer-archive `SyncMessage` is **absent** from libsignal-service-rs's
+   generated proto. Needs adding the field + regenerating protos in the
+   calibrae/libsignal-service-rs fork, then a live primary to exercise the
+   request→upload→download handshake. This is the trigger that fetches an
+   archive; until it exists, import runs only against an archive file
+   obtained out-of-band.
+3. **Attachments / non-text items** — ChatItem attachments are FilePointers
+   needing the download path; reactions/quotes map to existing modifiers.
+4. **Import UI polish** — basic file-picker import shipped; add post-link
+   auto-prompt + progress once the request handshake lands.
 
 The decode foundation is done; the above is the import body, gated on a live
 2-device link (Piccione = secondary) for end-to-end validation.
