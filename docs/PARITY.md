@@ -56,6 +56,14 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 2 (branch parity-push, PR #3)
+
+- ✅ Reactions: send + render (chips + quick-emoji picker)
+- ✅ Delete-for-everyone (send) + honor incoming deletes + copy text
+- ✅ Rich text + @mentions (bodyRanges: bold/italic/strike/mono/spoiler)
+- ✅ Desktop notifications for inbound messages (unfocused window)
+- ✅ Conversation search + timeline date separators
+
 ## Shipped — wave 1 (branch parity-push, PR #3)
 
 - ✅ Contact + group avatars (list / header / picker)
