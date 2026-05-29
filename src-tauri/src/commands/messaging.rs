@@ -246,3 +246,15 @@ pub async fn list_devices(
     let state = app.state::<AppState>();
     state.messaging.list_devices().await
 }
+
+/// Send a typing start/stop indicator (1:1). Fire-and-forget.
+#[tauri::command]
+pub async fn send_typing(
+    app: AppHandle,
+    conversation_id: String,
+    started: bool,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.messaging.send_typing(&conversation_id, started).await;
+    Ok(())
+}
