@@ -331,3 +331,10 @@ pub async fn set_pin(
         .set_pin(&conversation_id, &target_author_uuid, target_timestamp, pinned)
         .await
 }
+
+/// Whether message-backup / Link & Sync is possible on this device.
+#[tauri::command]
+pub async fn backup_available(app: AppHandle) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    Ok(state.messaging.backup_available().await)
+}

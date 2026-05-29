@@ -93,6 +93,11 @@ enum SendRequest {
         option_indexes: Vec<u32>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Whether message-backup / Link & Sync is possible (AEP persisted +
+    /// BackupKey derivable).
+    BackupStatus {
+        reply: oneshot::Sender<bool>,
+    },
     /// Compute the safety number (identity fingerprint) for a 1:1 contact.
     SafetyNumber {
         uuid: Uuid,
@@ -459,6 +464,19 @@ impl MessagingService {
         .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
         reply_rx.await.map_err(|_| "vote reply dropped".to_string())?
+    }
+
+    /// Whether this device can derive a BackupKey (AEP persisted at link).
+    /// Gates the future Link & Sync history-import affordance.
+    pub async fn backup_available(&self) -> bool {
+        let tx_guard = self.send_tx.lock().await;
+        let Some(tx) = tx_guard.as_ref() else { return false };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if tx.send(SendRequest::BackupStatus { reply: reply_tx }).is_err() {
+            return false;
+        }
+        drop(tx_guard);
+        reply_rx.await.unwrap_or(false)
     }
 
     /// Compute the safety number for a contact — the 60-digit identity
@@ -1184,6 +1202,14 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
                 error!("poll vote send failed: {}", e);
             }
             let _ = reply.send(result);
+        }
+        SendRequest::BackupStatus { reply } => {
+            let ready = mgr
+                .registration_data()
+                .account_entropy_pool()
+                .and_then(crate::backups::derive_backup_key)
+                .is_some();
+            let _ = reply.send(ready);
         }
         SendRequest::SafetyNumber { uuid, reply } => {
             let result = do_safety_number(mgr, uuid).await;
