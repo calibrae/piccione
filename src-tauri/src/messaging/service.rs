@@ -1391,19 +1391,27 @@ async fn import_backup_impl(
         .account_entropy_pool()
         .ok_or("no account entropy pool (relink needed for backups)")?;
     let aci = Aci::from(reg.service_ids.aci);
+    let self_uuid = reg.service_ids.aci;
     let key = crate::backups::derive_message_backup_key(aep, aci)
         .ok_or("could not derive backup key")?;
     let bytes = std::fs::read(path).map_err(|e| format!("read archive: {e}"))?;
-    let contacts = crate::backups::extract_contacts(&bytes, &key).await?;
+    let data = crate::backups::extract_backup(&bytes, &key, self_uuid).await?;
 
     // SqliteStore is a cheap clone over the same pool; writes persist.
     let mut store = mgr.store().clone();
     let mut n = 0usize;
-    for c in &contacts {
+    for c in &data.contacts {
         store
             .save_contact(c)
             .await
             .map_err(|e| format!("save contact: {e}"))?;
+        n += 1;
+    }
+    for (thread, content) in data.messages {
+        store
+            .save_message(&thread, content)
+            .await
+            .map_err(|e| format!("save message: {e}"))?;
         n += 1;
     }
     Ok(n)
