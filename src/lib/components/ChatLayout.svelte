@@ -78,6 +78,7 @@
     inputText = "";
     pendingFiles = [];
     replyingTo = null;
+    stopTyping();
     try { localStorage.removeItem(draftKey(convId)); } catch { /* ignore */ }
 
     // Don't block the UI — fire and forget.
@@ -143,6 +144,30 @@
     const el = e.target as HTMLTextAreaElement;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 140) + "px";
+  }
+
+  // Typing indicator: send "started" on input (throttled), auto-"stopped"
+  // after a short idle. 1:1 only (backend no-ops groups).
+  let typingActive = false;
+  let typingTimer: ReturnType<typeof setTimeout> | null = null;
+  function pokeTyping() {
+    const id = messagingStore.activeConversationId;
+    const convo = activeConversation;
+    if (!id || !convo || convo.is_group) return;
+    if (!typingActive) {
+      typingActive = true;
+      invoke("send_typing", { conversationId: id, started: true }).catch(() => {});
+    }
+    if (typingTimer) clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => stopTyping(), 4000);
+  }
+  function stopTyping() {
+    if (typingTimer) { clearTimeout(typingTimer); typingTimer = null; }
+    const id = messagingStore.activeConversationId;
+    if (typingActive && id) {
+      typingActive = false;
+      invoke("send_typing", { conversationId: id, started: false }).catch(() => {});
+    }
   }
 
   function draftKey(id: string): string {
@@ -293,6 +318,15 @@
     const cur = activeMessages[i];
     return new Date(prev.timestamp).toDateString() !== new Date(cur.timestamp).toDateString();
   }
+
+  let someoneTyping = $derived.by(() => {
+    const id = messagingStore.activeConversationId;
+    if (!id) return false;
+    const perChat = messagingStore.typing.get(id);
+    if (!perChat) return false;
+    for (const action of perChat.values()) if (action === "started") return true;
+    return false;
+  });
 
   let activeMessages = $derived(
     (messagingStore.activeConversationId
@@ -827,6 +861,9 @@
           </div>
         {/each}
       </div>
+      {#if someoneTyping}
+        <div class="typing-indicator"><span></span><span></span><span></span></div>
+      {/if}
       {#if pendingFiles.length > 0}
         <div class="pending-files">
           {#each pendingFiles as file, i}
@@ -857,7 +894,7 @@
           bind:value={inputText}
           onkeydown={handleKeydown}
           onpaste={handlePaste}
-          oninput={autosize}
+          oninput={(e) => { autosize(e); pokeTyping(); }}
         ></textarea>
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
@@ -893,6 +930,25 @@
 {/if}
 
 <style>
+  .typing-indicator {
+    display: flex;
+    gap: 4px;
+    padding: 6px 14px;
+    align-items: center;
+  }
+  .typing-indicator span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-secondary, #a1a1aa);
+    animation: typing-bounce 1.2s infinite ease-in-out;
+  }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.15s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
   .sender-label {
     display: block;
     font-size: 0.74rem;

@@ -72,6 +72,11 @@ enum SendRequest {
     ListDevices {
         reply: oneshot::Sender<Result<Vec<crate::messaging::types::DeviceDto>, String>>,
     },
+    /// Typing indicator (start/stop) for a 1:1 conversation. Fire-and-forget.
+    Typing {
+        conversation_id: String,
+        started: bool,
+    },
 }
 
 /// Core messaging service.
@@ -363,6 +368,18 @@ impl MessagingService {
         .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
         reply_rx.await.map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Send a typing start/stop indicator (1:1 only). Fire-and-forget so it
+    /// never blocks the keystroke path; a dropped indicator is harmless.
+    pub async fn send_typing(&self, conversation_id: &str, started: bool) {
+        let tx_guard = self.send_tx.lock().await;
+        if let Some(tx) = tx_guard.as_ref() {
+            let _ = tx.send(SendRequest::Typing {
+                conversation_id: conversation_id.to_string(),
+                started,
+            });
+        }
     }
 
     /// List the account's linked devices (read-only — unlinking requires the
@@ -879,6 +896,14 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             }
             let _ = reply.send(result);
         }
+        SendRequest::Typing {
+            conversation_id,
+            started,
+        } => {
+            if let Err(e) = do_send_typing(mgr, &conversation_id, started).await {
+                error!("typing send failed: {}", e);
+            }
+        }
         SendRequest::ListDevices { reply } => {
             let current = mgr.registration_data().device_id;
             let result = mgr
@@ -988,6 +1013,33 @@ async fn do_send_delete(
             .send_message_to_group(&master_key, data_message, timestamp)
             .await
             .map_err(|e| format!("failed to send group delete: {e}")),
+    }
+}
+
+/// Send a `TypingMessage` (start/stop) to a 1:1 conversation. Groups are
+/// skipped for now (they need the group_id set on the message).
+async fn do_send_typing(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    started: bool,
+) -> Result<(), String> {
+    use presage::libsignal_service::proto::typing_message::Action;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    match parse_thread(conversation_id)? {
+        presage::store::Thread::Contact(service_id) => {
+            let typing = TypingMessage {
+                timestamp: Some(timestamp),
+                action: Some(if started { Action::Started } else { Action::Stopped } as i32),
+                group_id: None,
+            };
+            mgr.send_message(service_id, typing, timestamp)
+                .await
+                .map_err(|e| format!("failed to send typing: {e}"))
+        }
+        presage::store::Thread::Group(_) => Ok(()),
     }
 }
 
