@@ -119,6 +119,9 @@ pub async fn validate_backup(
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct BackupSummary {
     pub recipients: usize,
+    pub contacts: usize,
+    pub groups: usize,
+    pub selfs: usize,
     pub chats: usize,
     pub chat_items: usize,
     pub sticker_packs: usize,
@@ -138,15 +141,30 @@ pub async fn summarize_backup(
     let frames = FramesReader::new(key, CursorFactory::new(bytes))
         .await
         .map_err(|e| format!("open frames: {e}"))?;
-    let mut reader = VarintDelimitedReader::new(frames);
+    count_frames(frames).await
+}
 
-    // First length-delimited message is the BackupInfo header.
+/// Reader-generic frame counter: reads the varint-delimited `BackupInfo`
+/// header then each `Frame`, tallying by type. Works over either a decrypting
+/// `FramesReader` (real archive) or a plaintext stream (the canonical test
+/// fixture), so the proto-decode + oneof-match logic is unit-tested against
+/// real Signal backup data.
+#[cfg(feature = "backups")]
+async fn count_frames<R>(reader: R) -> Result<BackupSummary, String>
+where
+    R: futures::io::AsyncRead + Unpin,
+{
+    use libsignal_message_backup::parse::VarintDelimitedReader;
+    use libsignal_message_backup::proto::backup as pb;
+    use protobuf3::Message;
+
+    let mut reader = VarintDelimitedReader::new(reader);
     let header = reader
         .read_next()
         .await
         .map_err(|e| format!("read header: {e}"))?
         .ok_or("empty backup")?;
-    let _info = pb::BackupInfo::parse_from_bytes(&header)
+    pb::BackupInfo::parse_from_bytes(&header)
         .map_err(|e| format!("decode BackupInfo: {e}"))?;
 
     let mut sum = BackupSummary::default();
@@ -157,7 +175,16 @@ pub async fn summarize_backup(
     {
         let frame = pb::Frame::parse_from_bytes(&buf).map_err(|e| format!("decode frame: {e}"))?;
         match frame.item {
-            Some(pb::frame::Item::Recipient(_)) => sum.recipients += 1,
+            Some(pb::frame::Item::Recipient(r)) => {
+                sum.recipients += 1;
+                use pb::recipient::Destination as D;
+                match r.destination {
+                    Some(D::Contact(_)) => sum.contacts += 1,
+                    Some(D::Group(_)) => sum.groups += 1,
+                    Some(D::Self_(_)) => sum.selfs += 1,
+                    _ => {}
+                }
+            }
             Some(pb::frame::Item::Chat(_)) => sum.chats += 1,
             Some(pb::frame::Item::ChatItem(_)) => sum.chat_items += 1,
             Some(pb::frame::Item::StickerPack(_)) => sum.sticker_packs += 1,
@@ -165,4 +192,29 @@ pub async fn summarize_backup(
         }
     }
     Ok(sum)
+}
+
+#[cfg(all(test, feature = "backups"))]
+mod import_tests {
+    use super::*;
+
+    // Canonical plaintext backup fixture vendored from libsignal
+    // (message-backup/tests/res/canonical-backup.binproto). Validates the
+    // frame-decode + oneof-match path against real Signal backup data.
+    const CANONICAL: &[u8] = include_bytes!("testdata/canonical-backup.binproto");
+
+    #[test]
+    fn counts_frames_in_canonical_backup() {
+        let sum = futures::executor::block_on(count_frames(futures::io::Cursor::new(CANONICAL)))
+            .expect("canonical backup parses");
+        // The canonical fixture carries 4 recipients + an account frame
+        // (counted as `other`) and no chats — proves both Recipient and
+        // non-Recipient frame decode + the oneof match work on real data.
+        assert_eq!(sum.recipients, 4, "recipient decode, got {sum:?}");
+        assert!(sum.other >= 1, "account frame should decode, got {sum:?}");
+        // The destination oneof match works: the canonical fixture carries a
+        // Self recipient (+ distribution-list/call-link entries we don't
+        // separately tally). Real contacts/groups exercise the same arms.
+        assert!(sum.selfs >= 1, "Self recipient should decode, got {sum:?}");
+    }
 }
