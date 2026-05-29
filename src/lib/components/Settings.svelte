@@ -1,8 +1,49 @@
 <script lang="ts">
   import { settingsStore, type Theme } from "../stores/settings.svelte";
   import { messagingStore } from "../stores/messaging.svelte";
+  import { invoke } from "@tauri-apps/api/core";
+
+  interface DeviceDto {
+    id: number;
+    name: string | null;
+    created_at: number;
+    last_seen: number;
+    is_current: boolean;
+  }
 
   let { open = $bindable(false) }: { open: boolean } = $props();
+  let devices = $state<DeviceDto[]>([]);
+  let devicesLoading = $state(false);
+  let devicesError = $state<string | null>(null);
+
+  async function loadDevices() {
+    devicesLoading = true;
+    devicesError = null;
+    try {
+      devices = await invoke<DeviceDto[]>("list_devices");
+    } catch (e) {
+      devicesError = String(e);
+    } finally {
+      devicesLoading = false;
+    }
+  }
+
+  function fmtDate(ms: number): string {
+    if (!ms) return "—";
+    return new Date(ms).toLocaleString([], {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  // Load devices when the panel opens.
+  $effect(() => {
+    if (open && devices.length === 0 && !devicesLoading) {
+      void loadDevices();
+    }
+  });
   let signingOut = $state(false);
   let confirmSignOut = $state(false);
   let saveError = $state<string | null>(null);
@@ -106,6 +147,29 @@
     </section>
 
     <section class="group">
+      <h3>Appareils liés</h3>
+      {#if devicesLoading}
+        <p class="muted">Chargement…</p>
+      {:else if devicesError}
+        <p class="error">Erreur : {devicesError}</p>
+      {:else if devices.length === 0}
+        <p class="muted">Aucun appareil.</p>
+      {:else}
+        <ul class="device-list">
+          {#each devices as d}
+            <li class="device">
+              <div class="device-info">
+                <span class="device-name">{d.name || `Appareil ${d.id}`}{#if d.is_current} <em>(cet appareil)</em>{/if}</span>
+                <span class="device-meta">Vu : {fmtDate(d.last_seen)} · Lié : {fmtDate(d.created_at)}</span>
+              </div>
+            </li>
+          {/each}
+        </ul>
+        <p class="muted small">Pour délier un appareil, utilisez votre téléphone (appareil principal).</p>
+      {/if}
+    </section>
+
+    <section class="group">
       <h3>Compte</h3>
       <dl class="info">
         <dt>ACI</dt>
@@ -138,6 +202,15 @@
 {/if}
 
 <style>
+  .device-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .device { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border, #27272a); border-radius: 8px; }
+  .device-info { display: flex; flex-direction: column; gap: 2px; }
+  .device-name { font-weight: 600; font-size: 0.9rem; }
+  .device-name em { color: var(--accent, #3b82f6); font-style: normal; font-weight: 400; font-size: 0.8rem; }
+  .device-meta { font-size: 0.76rem; color: var(--text-secondary, #a1a1aa); }
+  .muted { color: var(--text-secondary, #a1a1aa); font-size: 0.85rem; }
+  .muted.small { font-size: 0.74rem; margin-top: 6px; }
+
   .overlay {
     position: fixed;
     inset: 0;

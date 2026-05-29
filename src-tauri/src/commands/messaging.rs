@@ -237,3 +237,12 @@ pub async fn delete_for_everyone(
         .send_delete(&conversation_id, target_timestamp)
         .await
 }
+
+/// List the account's linked devices (read-only).
+#[tauri::command]
+pub async fn list_devices(
+    app: AppHandle,
+) -> Result<Vec<crate::messaging::types::DeviceDto>, String> {
+    let state = app.state::<AppState>();
+    state.messaging.list_devices().await
+}

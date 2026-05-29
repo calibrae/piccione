@@ -68,6 +68,10 @@ enum SendRequest {
         target_timestamp: u64,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// List the account's linked devices (read-only).
+    ListDevices {
+        reply: oneshot::Sender<Result<Vec<crate::messaging::types::DeviceDto>, String>>,
+    },
 }
 
 /// Core messaging service.
@@ -359,6 +363,18 @@ impl MessagingService {
         .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
         reply_rx.await.map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// List the account's linked devices (read-only — unlinking requires the
+    /// primary phone).
+    pub async fn list_devices(&self) -> Result<Vec<crate::messaging::types::DeviceDto>, String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::ListDevices { reply: reply_tx })
+            .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "list devices reply dropped".to_string())?
     }
 
     /// Delete-for-everyone a message you sent.
@@ -861,6 +877,29 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             if let Err(ref e) = result {
                 error!("delete send failed: {}", e);
             }
+            let _ = reply.send(result);
+        }
+        SendRequest::ListDevices { reply } => {
+            let current = mgr.registration_data().device_id;
+            let result = mgr
+                .devices()
+                .await
+                .map_err(|e| format!("failed to list devices: {e}"))
+                .map(|devices| {
+                    devices
+                        .into_iter()
+                        .map(|d| {
+                            let id = u32::from(d.id);
+                            crate::messaging::types::DeviceDto {
+                                id,
+                                name: d.name,
+                                created_at: d.created_at.timestamp_millis(),
+                                last_seen: d.last_seen.timestamp_millis(),
+                                is_current: Some(id) == current,
+                            }
+                        })
+                        .collect()
+                });
             let _ = reply.send(result);
         }
     }

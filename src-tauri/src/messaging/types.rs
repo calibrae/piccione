@@ -40,6 +40,18 @@ pub struct MediaItem {
     pub attachment: AttachmentInfo,
 }
 
+/// A linked device on the account, for the "Linked devices" view.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceDto {
+    pub id: u32,
+    pub name: Option<String>,
+    /// Epoch-ms timestamps for the frontend to format.
+    pub created_at: i64,
+    pub last_seen: i64,
+    /// True for the device this client is running as.
+    pub is_current: bool,
+}
+
 /// A reply target as shown in the UI — the snippet of the message being
 /// quoted. Built from `DataMessage.quote`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

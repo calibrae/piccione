@@ -183,6 +183,7 @@ pub fn run() {
             commands::messaging::save_pasted_image,
             commands::messaging::send_reaction,
             commands::messaging::delete_for_everyone,
+            commands::messaging::list_devices,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
