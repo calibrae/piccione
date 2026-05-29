@@ -95,10 +95,34 @@ most effort is the `Frame`→store mapping + the sync-request protobuf. Full
 remote backups (B): +2–3 weeks (SVR-B, backup-auth, media). Recommend shipping
 A first.
 
-## Status
+## Status — codec read path PROVEN (2026-05-30)
 
-Design + first unknown resolved. AEP persistence confirmed MISSING in presage
-(must be added — see risk #1). Next spike: (1) fork-patch presage to persist
-the AEP, (2) add `libsignal-message-backup` + `libsignal-account-keys` deps,
-(3) read a test backup file with `BackupReader` and log frames — before
-touching the store-import path.
+Implemented + merged to main:
+- presage fork persists the AEP (calibrae/presage#1).
+- `derive_backup_key` (AEP→BackupKey), `derive_message_backup_key`
+  (→MessageBackupKey), `backup_available` command. (#27, #28)
+- `validate_backup` (decrypt+decompress+validate) and `summarize_backup`
+  (FramesReader→VarintDelimitedReader→Frame loop), behind a default-on
+  `backups` feature. (#29)
+- **Runtime-validated** against libsignal's canonical-backup.binproto: frame
+  decode + the Recipient `destination` oneof both proven on real data (4
+  recipients incl. a Self decode). (#30)
+
+Dependency facts (load-bearing): message-backup pinned `tag=v0.91.0` (matches
+libsignal-service) resolves clean; its `proto` module is public only under the
+`test-util` feature (no extra deps); its generated protos are **rust-protobuf
+3.x** (`protobuf3` alias, `Message::parse_from_bytes`), NOT prost;
+`CompletedBackup` fields are private so import uses the raw frame loop.
+
+## Remaining (all [LIVE-TEST] — need a real encrypted transfer archive)
+
+1. **Frame→presage store mapping** — `Recipient::Contact`→`save_contact`,
+   `::Group`→`save_group`; `ChatItem`→reconstruct `Content`/`DataMessage`→
+   `save_message` (the hard part: edits/reactions/quotes/attachments fidelity).
+   Compile-verifiable now; correctness needs a real archive.
+2. **Transfer-archive request** — `SyncMessage` request to the primary +
+   download; protobuf may need regenerating in libsignal-service-rs.
+3. **Import UI** — post-link "Importer l'historique" + progress.
+
+The decode foundation is done; the above is the import body, gated on a live
+2-device link (Piccione = secondary) for end-to-end validation.
