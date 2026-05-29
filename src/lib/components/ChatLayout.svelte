@@ -946,6 +946,11 @@
           {#if isNewDay(i)}
             <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
           {/if}
+          {#if msg.system_event}
+            <div class="system-event">
+              {msg.system_event === "group-call" ? "📞 Appel de groupe" : msg.system_event}
+            </div>
+          {:else}
           <div class="message" class:outgoing={msg.is_outgoing} class:highlight={highlightTs === msg.timestamp} data-ts={msg.timestamp}>
             {#if showSender(i)}
               <span class="sender-label">{msg.sender_name}</span>
@@ -1117,6 +1122,7 @@
               {/if}
             </div>
           </div>
+          {/if}
         {/each}
       </div>
       {#if scrolledUp}
