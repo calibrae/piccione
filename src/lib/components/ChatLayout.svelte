@@ -26,6 +26,7 @@
   let convoSearch = $state("");
   let showMsgSearch = $state(false);
   let scrolledUp = $state(false);
+  let highlightTs = $state<number | null>(null);
   let msgSearch = $state("");
 
   onMount(async () => {
@@ -148,6 +149,14 @@
     if (!el) return;
     scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight > 240;
   }
+  function jumpToMessage(ts: number) {
+    const el = messagesContainer?.querySelector(`[data-ts="${ts}"]`) as HTMLElement | null;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    highlightTs = ts;
+    setTimeout(() => { if (highlightTs === ts) highlightTs = null; }, 1600);
+  }
+
   function scrollToBottom() {
     if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
@@ -758,7 +767,7 @@
           {#if isNewDay(i)}
             <div class="day-sep"><span>{dayLabel(msg.timestamp)}</span></div>
           {/if}
-          <div class="message" class:outgoing={msg.is_outgoing}>
+          <div class="message" class:outgoing={msg.is_outgoing} class:highlight={highlightTs === msg.timestamp} data-ts={msg.timestamp}>
             {#if showSender(i)}
               <span class="sender-label">{msg.sender_name}</span>
             {/if}
@@ -801,10 +810,10 @@
             {/if}
             <div class="bubble">
               {#if msg.quote}
-                <div class="quote-bar">
+                <button class="quote-bar quote-bar-btn" onclick={() => jumpToMessage(msg.quote!.id)} title="Aller au message">
                   <span class="quote-author">{msg.quote.author_name}</span>
                   <span class="quote-text">{msg.quote.text}</span>
-                </div>
+                </button>
               {/if}
               {#if msg.attachments && msg.attachments.length > 0}
                 <div class="attachments">
@@ -982,6 +991,20 @@
 {/if}
 
 <style>
+  .quote-bar-btn {
+    border: none;
+    border-left: 3px solid var(--accent, #3b82f6);
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+  }
+  .message.highlight .bubble {
+    animation: hl-flash 1.6s ease-out;
+  }
+  @keyframes hl-flash {
+    0%, 30% { box-shadow: 0 0 0 2px var(--accent, #3b82f6); }
+    100% { box-shadow: none; }
+  }
   .edited-tag { font-style: italic; opacity: 0.8; }
   .jumbomoji {
     font-size: 2.6rem;
