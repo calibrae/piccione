@@ -318,8 +318,10 @@ pub async fn extract_backup(
 
     let mut contacts = Vec::new();
     let mut messages = Vec::new();
-    // recipient backup-id -> ACI uuid (contacts + self)
+    // recipient backup-id -> ACI uuid (contacts + self), for message authors
     let mut id_aci: HashMap<u64, uuid::Uuid> = HashMap::new();
+    // recipient backup-id -> presage Thread (contact or group), for the chat
+    let mut id_thread: HashMap<u64, Thread> = HashMap::new();
     // chat backup-id -> recipient backup-id
     let mut chat_recipient: HashMap<u64, u64> = HashMap::new();
 
@@ -332,9 +334,15 @@ pub async fn extract_backup(
                     Some(pb::recipient::Destination::Contact(c)) => {
                         if let Some(aci) = c.aci.as_ref().and_then(|a| uuid::Uuid::from_slice(a).ok()) {
                             id_aci.insert(rid, aci);
+                            id_thread.insert(rid, Thread::Contact(ServiceId::Aci(Aci::from(aci))));
                         }
                         if let Some(contact) = backup_contact_to_presage(c) {
                             contacts.push(contact);
+                        }
+                    }
+                    Some(pb::recipient::Destination::Group(g)) => {
+                        if let Ok(mk) = <[u8; 32]>::try_from(g.masterKey.as_slice()) {
+                            id_thread.insert(rid, Thread::Group(mk));
                         }
                     }
                     Some(pb::recipient::Destination::Self_(_)) => {
@@ -347,9 +355,9 @@ pub async fn extract_backup(
                 chat_recipient.insert(c.id, c.recipientId);
             }
             Some(pb::frame::Item::ChatItem(item)) => {
-                // 1:1 text messages only for now.
+                // 1:1 + group text messages.
                 let Some(peer_rid) = chat_recipient.get(&item.chatId) else { continue };
-                let Some(&peer_aci) = id_aci.get(peer_rid) else { continue };
+                let Some(thread) = id_thread.get(peer_rid).cloned() else { continue };
                 let author_aci = id_aci.get(&item.authorId).copied().unwrap_or(self_uuid);
                 // Extract text from a StandardMessage.
                 let text = match &item.item {
@@ -360,10 +368,15 @@ pub async fn extract_backup(
                 };
                 let Some(body) = text else { continue };
 
-                let thread = Thread::Contact(ServiceId::Aci(Aci::from(peer_aci)));
+                // Destination: for 1:1 the peer's ACI, for group ourselves
+                // (groups carry the routing in the thread/master key).
+                let destination = match &thread {
+                    Thread::Contact(sid) => sid.clone(),
+                    Thread::Group(_) => ServiceId::Aci(Aci::from(self_uuid)),
+                };
                 let metadata = Metadata {
                     sender: ServiceId::Aci(Aci::from(author_aci)),
-                    destination: ServiceId::Aci(Aci::from(if author_aci == self_uuid { peer_aci } else { self_uuid })),
+                    destination,
                     sender_device: DeviceId::new(1).expect("device 1"),
                     timestamp: item.dateSent,
                     needs_receipt: false,
