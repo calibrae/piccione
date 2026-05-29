@@ -56,6 +56,13 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 3 (branch parity-push, PR #3)
+
+- ✅ Multiline composer (Shift+Enter) + per-conversation drafts
+- ✅ Linked-devices view (read-only; unlink stays on the phone) — also adds the messaging-thread query plumbing (oneshot round-trip) for future live-Manager calls
+- ✅ Unread message badges (in-memory)
+- ✅ Restored ChatLayout test suite (mock get_settings + matchMedia)
+
 ## Shipped — wave 2 (branch parity-push, PR #3)
 
 - ✅ Reactions: send + render (chips + quick-emoji picker)
