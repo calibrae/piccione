@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { messagingStore } from "../stores/messaging.svelte";
   import type { ChatMessage } from "../types";
@@ -159,6 +160,15 @@
     } catch {
       /* ignore */
     }
+  });
+
+  // Reflect total unread on the dock/taskbar badge.
+  $effect(() => {
+    let total = 0;
+    for (const n of messagingStore.unread.values()) total += n;
+    getCurrentWindow()
+      .setBadgeCount(total > 0 ? total : undefined)
+      .catch(() => {});
   });
 
   function handleKeydown(e: KeyboardEvent) {
