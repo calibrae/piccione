@@ -374,12 +374,21 @@ where
                 let Some(peer_rid) = chat_recipient.get(&item.chatId) else { continue };
                 let Some(thread) = id_thread.get(peer_rid).cloned() else { continue };
                 let author_aci = id_aci.get(&item.authorId).copied().unwrap_or(self_uuid);
-                // Extract text from a StandardMessage.
-                let text = match &item.item {
+                // Extract text (+ optional reply quote) from a StandardMessage.
+                let (text, quote) = match &item.item {
                     Some(pb::chat_item::Item::StandardMessage(m)) => {
-                        m.text.as_ref().map(|t| t.body.clone())
+                        let q = m.quote.as_ref().map(|q| {
+                            use presage::libsignal_service::proto::data_message::Quote;
+                            Quote {
+                                id: q.targetSentTimestamp,
+                                author_aci: id_aci.get(&q.authorId).map(|a| a.to_string()),
+                                text: q.text.as_ref().map(|t| t.body.clone()),
+                                ..Default::default()
+                            }
+                        });
+                        (m.text.as_ref().map(|t| t.body.clone()), q)
                     }
-                    _ => None,
+                    _ => (None, None),
                 };
                 let Some(body) = text else { continue };
 
@@ -402,6 +411,7 @@ where
                 let dm = DataMessage {
                     body: Some(body),
                     timestamp: Some(item.dateSent),
+                    quote,
                     ..Default::default()
                 };
                 messages.push((thread, Content::from_body(ContentBody::DataMessage(dm), metadata)));
@@ -529,6 +539,14 @@ mod message_import_tests {
         text.body = "hello from backup".to_string();
         let mut sm = pb::StandardMessage::new();
         sm.text = Some(text).into();
+        // A reply quoting an earlier message by the peer.
+        let mut qtext = pb::Text::new();
+        qtext.body = "earlier".to_string();
+        let mut q = pb::Quote::new();
+        q.targetSentTimestamp = Some(1_699_999_999_000);
+        q.authorId = 5;
+        q.text = Some(qtext).into();
+        sm.quote = Some(q).into();
         let mut item = pb::ChatItem::new();
         item.chatId = 9;
         item.authorId = 5;
@@ -558,6 +576,9 @@ mod message_import_tests {
         if let presage::libsignal_service::content::ContentBody::DataMessage(dm) = &content.body {
             assert_eq!(dm.body.as_deref(), Some("hello from backup"));
             assert_eq!(dm.timestamp, Some(1_700_000_000_000));
+            let q = dm.quote.as_ref().expect("quote imported");
+            assert_eq!(q.id, Some(1_699_999_999_000));
+            assert_eq!(q.text.as_deref(), Some("earlier"));
         } else {
             panic!("expected DataMessage");
         }
