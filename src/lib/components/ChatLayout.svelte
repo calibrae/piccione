@@ -4,6 +4,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { messagingStore } from "../stores/messaging.svelte";
+  import type { ChatMessage } from "../types";
   import { settingsStore } from "../stores/settings.svelte";
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
@@ -20,6 +21,7 @@
   let showUuidInput = $state(false);
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
+  let replyingTo = $state<ChatMessage | null>(null);
 
   onMount(async () => {
     await settingsStore.load();
@@ -58,13 +60,21 @@
     const body = text;
     const files = [...pendingFiles];
     const convId = messagingStore.activeConversationId;
+    const quote = replyingTo
+      ? {
+          id: replyingTo.timestamp,
+          author_uuid: replyingTo.sender_id,
+          text: quoteSnippet(replyingTo),
+        }
+      : undefined;
     inputText = "";
     pendingFiles = [];
+    replyingTo = null;
 
     // Don't block the UI — fire and forget.
     // Errors surface as toasts via the messaging store.
-    if (files.length > 0) {
-      messagingStore.sendMessageWithAttachments(convId, body, files).catch(() => {});
+    if (files.length > 0 || quote) {
+      messagingStore.sendMessageWithAttachments(convId, body, files, quote).catch(() => {});
     } else {
       messagingStore.sendMessage(convId, body);
     }
@@ -223,6 +233,18 @@
       (c) => c.id === messagingStore.activeConversationId
     )
   );
+
+  function startReply(msg: ChatMessage) {
+    replyingTo = msg;
+  }
+  function cancelReply() {
+    replyingTo = null;
+  }
+  function quoteSnippet(msg: ChatMessage): string {
+    if (msg.body) return msg.body;
+    if (msg.attachments?.length) return "📎 " + (msg.attachments[0].file_name || "pièce jointe");
+    return "";
+  }
 
   function openLightbox(src: string) {
     lightboxSrc = src;
@@ -474,7 +496,19 @@
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
         {#each activeMessages as msg}
           <div class="message" class:outgoing={msg.is_outgoing}>
+            <button
+              class="reply-action"
+              title="Répondre"
+              aria-label="Répondre"
+              onclick={() => startReply(msg)}
+            >↩</button>
             <div class="bubble">
+              {#if msg.quote}
+                <div class="quote-bar">
+                  <span class="quote-author">{msg.quote.author_name}</span>
+                  <span class="quote-text">{msg.quote.text}</span>
+                </div>
+              {/if}
               {#if msg.attachments && msg.attachments.length > 0}
                 <div class="attachments">
                   {#each msg.attachments as att}
@@ -553,6 +587,15 @@
           {/each}
         </div>
       {/if}
+      {#if replyingTo}
+        <div class="reply-preview">
+          <div class="reply-preview-body">
+            <span class="quote-author">{replyingTo.is_outgoing ? "Vous" : replyingTo.sender_name}</span>
+            <span class="quote-text">{quoteSnippet(replyingTo)}</span>
+          </div>
+          <button class="remove-file" onclick={cancelReply} aria-label="Annuler la réponse">&times;</button>
+        </div>
+      {/if}
       <div class="composer">
         <button class="attach-btn" onclick={handleAttachFile} title="Joindre un fichier">
           📎
@@ -598,6 +641,74 @@
 {/if}
 
 <style>
+  .quote-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding: 3px 8px;
+    margin-bottom: 4px;
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 4px;
+    max-width: 100%;
+  }
+  .quote-author {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent, #3b82f6);
+  }
+  .quote-text {
+    font-size: 0.82rem;
+    color: var(--text-secondary, #a1a1aa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 280px;
+  }
+  .message {
+    position: relative;
+  }
+  .reply-action {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    border: none;
+    background: var(--bg-secondary, #16213e);
+    color: var(--text-secondary, #a1a1aa);
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: opacity 0.12s;
+  }
+  .message:not(.outgoing) .reply-action {
+    right: -32px;
+  }
+  .message.outgoing .reply-action {
+    left: -32px;
+  }
+  .message:hover .reply-action {
+    opacity: 1;
+  }
+  .reply-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-secondary, #16213e);
+    border-top: 1px solid var(--border, #27272a);
+  }
+  .reply-preview-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    flex: 1;
+    min-width: 0;
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding-left: 8px;
+  }
   img.avatar {
     object-fit: cover;
     background: transparent;

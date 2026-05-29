@@ -91,6 +91,19 @@ pub(crate) fn extract_attachments(dm: &DataMessage) -> Vec<AttachmentInfo> {
         .collect()
 }
 
+/// Build a UI `QuotedMessage` from a `DataMessage.quote`. Author name is the
+/// raw uuid here; `enrich_sender_name`-style resolution can upgrade it later.
+fn extract_quote(dm: &DataMessage) -> Option<crate::messaging::types::QuotedMessage> {
+    let q = dm.quote.as_ref()?;
+    let author_id = q.author_aci.clone().unwrap_or_default();
+    Some(crate::messaging::types::QuotedMessage {
+        id: q.id.unwrap_or(0),
+        author_id: author_id.clone(),
+        author_name: author_id,
+        text: q.text.clone().unwrap_or_default(),
+    })
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -119,6 +132,7 @@ pub(crate) fn content_to_chat_message(
                 body,
                 attachments,
                 is_outgoing,
+                quote: extract_quote(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -139,6 +153,7 @@ pub(crate) fn content_to_chat_message(
                         body,
                         attachments,
                         is_outgoing: true,
+                        quote: extract_quote(dm),
                     });
                 }
             }

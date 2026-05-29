@@ -24,6 +24,13 @@ export interface Conversation {
   avatar_path: string | null;
 }
 
+export interface QuotedMessage {
+  id: number;
+  author_id: string;
+  author_name: string;
+  text: string;
+}
+
 export interface ChatMessage {
   timestamp: number;
   sender_id: string;
@@ -31,4 +38,5 @@ export interface ChatMessage {
   body: string | null;
   attachments: AttachmentInfo[];
   is_outgoing: boolean;
+  quote?: QuotedMessage;
 }

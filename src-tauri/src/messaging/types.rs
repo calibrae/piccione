@@ -40,6 +40,26 @@ pub struct MediaItem {
     pub attachment: AttachmentInfo,
 }
 
+/// A reply target as shown in the UI — the snippet of the message being
+/// quoted. Built from `DataMessage.quote`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QuotedMessage {
+    /// Sent-timestamp of the original message (its stable id).
+    pub id: u64,
+    pub author_id: String,
+    pub author_name: String,
+    pub text: String,
+}
+
+/// A reply the user is composing — fed back into the send path to populate
+/// `DataMessage.quote`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct QuoteInput {
+    pub id: u64,
+    pub author_uuid: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -48,6 +68,9 @@ pub struct ChatMessage {
     pub body: Option<String>,
     pub attachments: Vec<AttachmentInfo>,
     pub is_outgoing: bool,
+    /// Set when this message replies to another (DataMessage.quote).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<QuotedMessage>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -189,6 +212,7 @@ mod tests {
             body: Some("Hi there".to_string()),
             attachments: vec![],
             is_outgoing: false,
+            quote: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -328,6 +352,7 @@ mod tests {
                 body: Some("hi".to_string()),
                 attachments: vec![],
                 is_outgoing: false,
+                quote: None,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

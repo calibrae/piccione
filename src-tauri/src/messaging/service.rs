@@ -34,6 +34,7 @@ enum SendRequest {
         conversation_id: String,
         body: String,
         file_paths: Vec<String>,
+        quote: Option<crate::messaging::types::QuoteInput>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Send a ReceiptMessage (DELIVERY / READ / VIEWED) back to the sender of
@@ -288,16 +289,17 @@ impl MessagingService {
 
     /// Send a text message via the channel to the messaging thread.
     pub async fn send_message(&self, conversation_id: &str, body: &str) -> Result<(), String> {
-        self.send_message_with_attachments(conversation_id, body, vec![])
+        self.send_message_with_attachments(conversation_id, body, vec![], None)
             .await
     }
 
-    /// Send a message with optional attachments via the channel.
+    /// Send a message with optional attachments and an optional reply quote.
     pub async fn send_message_with_attachments(
         &self,
         conversation_id: &str,
         body: &str,
         file_paths: Vec<String>,
+        quote: Option<crate::messaging::types::QuoteInput>,
     ) -> Result<(), String> {
         let tx_guard = self.send_tx.lock().await;
         let tx = tx_guard.as_ref().ok_or("messaging not started")?;
@@ -307,6 +309,7 @@ impl MessagingService {
             conversation_id: conversation_id.to_string(),
             body: body.to_string(),
             file_paths,
+            quote,
             reply: reply_tx,
         })
         .map_err(|_| "send channel closed".to_string())?;
@@ -728,10 +731,11 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             conversation_id,
             body,
             file_paths,
+            quote,
             reply,
         } => {
             info!("processing send to {}", conversation_id);
-            let result = do_send(mgr, &conversation_id, &body, &file_paths).await;
+            let result = do_send(mgr, &conversation_id, &body, &file_paths, quote).await;
             if let Err(ref e) = result {
                 error!("send failed: {}", e);
             } else {
@@ -829,6 +833,7 @@ async fn do_send(
     conversation_id: &str,
     body: &str,
     file_paths: &[String],
+    quote: Option<crate::messaging::types::QuoteInput>,
 ) -> Result<(), String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -890,12 +895,24 @@ async fn do_send(
         Some(body.to_string())
     };
 
+    // Build DataMessage.quote from the reply target, if any.
+    let quote_proto = quote.map(|q| {
+        use presage::libsignal_service::proto::data_message::Quote;
+        Quote {
+            id: Some(q.id),
+            author_aci: Some(q.author_uuid),
+            text: Some(q.text),
+            ..Default::default()
+        }
+    });
+
     match thread {
         presage::store::Thread::Contact(service_id) => {
             let data_message = DataMessage {
                 body: body_opt,
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
+                quote: quote_proto,
                 ..Default::default()
             };
             mgr.send_message(service_id, data_message, timestamp)
@@ -907,6 +924,7 @@ async fn do_send(
                 body: body_opt,
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
+                quote: quote_proto,
                 ..Default::default()
             };
             mgr.send_message_to_group(&master_key, data_message, timestamp)

@@ -78,6 +78,7 @@ pub async fn send_message_with_attachments(
     conversation_id: String,
     body: String,
     file_paths: Vec<String>,
+    quote: Option<crate::messaging::types::QuoteInput>,
 ) -> Result<(), String> {
     info!(
         "send_message_with_attachments: {} files to {}",
@@ -87,7 +88,7 @@ pub async fn send_message_with_attachments(
     let state = app.state::<AppState>();
     let result = state
         .messaging
-        .send_message_with_attachments(&conversation_id, &body, file_paths)
+        .send_message_with_attachments(&conversation_id, &body, file_paths, quote)
         .await;
     match &result {
         Ok(()) => info!("send with attachments succeeded"),

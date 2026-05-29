@@ -3,6 +3,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Conversation, ChatMessage } from "../types";
 import { toastStore } from "./toasts.svelte";
 
+export interface QuoteInput {
+  id: number;
+  author_uuid: string;
+  text: string;
+}
+
 // --- Modifier event payloads (mirror src-tauri/src/messaging/types.rs) ---
 
 export type ReceiptKind = "delivered" | "read" | "viewed";
@@ -210,20 +216,22 @@ export function createMessagingStore() {
   async function sendMessageWithAttachments(
     conversationId: string,
     body: string,
-    filePaths: string[]
+    filePaths: string[],
+    quote?: QuoteInput
   ) {
     try {
       await invoke("send_message_with_attachments", {
         conversationId,
         body,
         filePaths,
+        quote: quote ?? null,
       });
       await loadConversations();
       await loadMessages(conversationId);
     } catch (e) {
       console.error("Failed to send with attachments:", e);
       toastStore.error("Échec de l'envoi", () =>
-        sendMessageWithAttachments(conversationId, body, filePaths)
+        sendMessageWithAttachments(conversationId, body, filePaths, quote)
       );
       throw e;
     }
