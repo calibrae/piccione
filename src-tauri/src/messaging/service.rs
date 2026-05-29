@@ -72,6 +72,11 @@ enum SendRequest {
     ListDevices {
         reply: oneshot::Sender<Result<Vec<crate::messaging::types::DeviceDto>, String>>,
     },
+    /// Fetch + cache a contact's profile; returns the resolved display name.
+    FetchProfile {
+        uuid: Uuid,
+        reply: oneshot::Sender<Result<Option<String>, String>>,
+    },
     /// Typing indicator (start/stop) for a 1:1 conversation. Fire-and-forget.
     Typing {
         conversation_id: String,
@@ -380,6 +385,20 @@ impl MessagingService {
                 started,
             });
         }
+    }
+
+    /// Fetch a contact's profile from the service (network), cache it in the
+    /// store, and return the resolved display name. `Ok(None)` if we have no
+    /// profile key for them. A wrong result here is a cosmetic name issue,
+    /// not a security signal.
+    pub async fn fetch_profile(&self, uuid: Uuid) -> Result<Option<String>, String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::FetchProfile { uuid, reply: reply_tx })
+            .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "fetch profile reply dropped".to_string())?
     }
 
     /// List the account's linked devices (read-only — unlinking requires the
@@ -1008,6 +1027,19 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
                         })
                         .collect()
                 });
+            let _ = reply.send(result);
+        }
+        SendRequest::FetchProfile { uuid, reply } => {
+            use presage::libsignal_service::protocol::Aci;
+            let service_id = ServiceId::Aci(Aci::from(uuid));
+            let result = match mgr.store().profile_key(&service_id).await {
+                Ok(Some(key)) => match mgr.retrieve_profile_by_uuid(Aci::from(uuid), key).await {
+                    Ok(profile) => Ok(profile.name.map(|n| n.to_string()).filter(|s| !s.trim().is_empty())),
+                    Err(e) => Err(format!("failed to fetch profile: {e}")),
+                },
+                Ok(None) => Ok(None),
+                Err(e) => Err(format!("no profile key: {e}")),
+            };
             let _ = reply.send(result);
         }
     }

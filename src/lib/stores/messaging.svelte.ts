@@ -371,6 +371,15 @@ export function createMessagingStore() {
     persistMuted();
   }
 
+  async function fetchProfile(uuid: string) {
+    try {
+      const name = await invoke<string | null>("fetch_profile", { uuid });
+      if (name) await loadConversations();
+    } catch (e) {
+      console.error("fetch_profile failed:", e);
+    }
+  }
+
   function markRead(conversationId: string) {
     if (unread.has(conversationId)) {
       unread.delete(conversationId);
@@ -403,6 +412,7 @@ export function createMessagingStore() {
     },
     isMuted,
     toggleMute,
+    fetchProfile,
     get receipts() {
       return receipts;
     },

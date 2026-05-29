@@ -44,6 +44,11 @@
     messagingStore.activeConversationId = id;
     messagingStore.markRead(id);
     showNewMessage = false;
+    // If this 1:1's display name is still just its UUID, try a profile fetch.
+    const convo = messagingStore.conversations.find((c) => c.id === id);
+    if (convo && !convo.is_group && convo.name === id) {
+      void messagingStore.fetchProfile(id);
+    }
     try {
       inputText = localStorage.getItem(draftKey(id)) ?? "";
     } catch {

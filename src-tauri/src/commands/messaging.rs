@@ -268,3 +268,11 @@ pub async fn search_messages(
     let state = app.state::<AppState>();
     state.messaging.search_messages(&query, 200).await
 }
+
+/// Fetch + cache a contact's profile; returns the resolved display name.
+#[tauri::command]
+pub async fn fetch_profile(app: AppHandle, uuid: String) -> Result<Option<String>, String> {
+    let parsed = uuid::Uuid::parse_str(&uuid).map_err(|_| "invalid uuid".to_string())?;
+    let state = app.state::<AppState>();
+    state.messaging.fetch_profile(parsed).await
+}
