@@ -7,6 +7,9 @@ pub struct Conversation {
     pub last_message: Option<String>,
     pub last_timestamp: u64,
     pub is_group: bool,
+    /// Absolute path to a cached avatar image, if one is known locally.
+    /// The frontend loads it via `convertFileSrc`. `None` → render initials.
+    pub avatar_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,6 +173,7 @@ mod tests {
             last_message: Some("Hello".to_string()),
             last_timestamp: 1700000000000,
             is_group: false,
+            avatar_path: None,
         };
         let json = serde_json::to_value(&conv).unwrap();
         assert_eq!(json["name"], "Alice");

@@ -42,6 +42,7 @@ const conv: Conversation = {
   last_message: "hi",
   last_timestamp: Date.now(),
   is_group: false,
+  avatar_path: null,
 };
 
 function imageMessage(): ChatMessage {

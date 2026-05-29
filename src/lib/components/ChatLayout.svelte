@@ -309,6 +309,14 @@
   }
 </script>
 
+{#snippet avatarEl(name: string, path: string | null, extra: string)}
+  {#if path}
+    <img class="avatar {extra}" src={convertFileSrc(path)} alt={name} />
+  {:else}
+    <div class="avatar {extra}">{name[0]?.toUpperCase() ?? "?"}</div>
+  {/if}
+{/snippet}
+
 <div class="layout">
   <aside class="sidebar">
     <div class="sidebar-header">
@@ -343,7 +351,7 @@
             class:active={messagingStore.activeConversationId === convo.id}
             onclick={() => selectConversation(convo.id)}
           >
-            <div class="avatar">{convo.name[0]?.toUpperCase() ?? "?"}</div>
+            {@render avatarEl(convo.name, convo.avatar_path, "")}
             <div class="convo-info">
               <div class="convo-top">
                 <span class="convo-name">{convo.name}</span>
@@ -367,7 +375,7 @@
           <label for="contact-search">Destinataire</label>
           {#if pickedContact}
             <div class="picked-contact">
-              <div class="avatar small">{pickedContact.name[0]?.toUpperCase() ?? "?"}</div>
+              {@render avatarEl(pickedContact.name, pickedContact.avatar_path, "small")}
               <div class="picked-info">
                 <div class="picked-name">{pickedContact.name}</div>
                 <div class="picked-uuid">{pickedContact.id}</div>
@@ -437,6 +445,7 @@
 
     {:else if activeConversation}
       <div class="chat-header">
+        {@render avatarEl(activeConversation.name, activeConversation.avatar_path, "small")}
         <h2>{activeConversation.name}</h2>
         {#if !activeConversation.is_group}
           <button
@@ -589,6 +598,13 @@
 {/if}
 
 <style>
+  img.avatar {
+    object-fit: cover;
+    background: transparent;
+  }
+  .chat-header .avatar.small {
+    margin-right: 10px;
+  }
   .msg-link {
     color: var(--accent, #3b82f6);
     text-decoration: underline;

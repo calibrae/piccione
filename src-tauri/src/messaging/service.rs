@@ -361,6 +361,12 @@ impl MessagingService {
 
         let mut conversations = Vec::new();
         let self_aci = self.self_aci.lock().await.clone();
+        // Avatars cache lives next to the DB: <app_data>/avatars/.
+        let avatars_dir = self
+            .db_path
+            .parent()
+            .map(|p| p.join("avatars"))
+            .unwrap_or_else(|| std::path::PathBuf::from("avatars"));
 
         let contacts = store
             .contacts()
@@ -392,12 +398,18 @@ impl MessagingService {
             let thread = presage::store::Thread::Contact(service_id);
             let (last_message, last_timestamp) = get_last_message_info(&store, &thread).await;
 
+            // Contact avatars arrive with the contact sync — purely local bytes.
+            let avatar_path = contact.avatar.as_ref().and_then(|a| {
+                cache_avatar(&avatars_dir, &format!("c-{uuid_str}"), &a.content_type, &a.reader)
+            });
+
             conversations.push(Conversation {
                 id: uuid_str,
                 name,
                 last_message,
                 last_timestamp,
                 is_group: false,
+                avatar_path,
             });
         }
 
@@ -412,12 +424,19 @@ impl MessagingService {
             let thread = presage::store::Thread::Group(master_key);
             let (last_message, last_timestamp) = get_last_message_info(&store, &thread).await;
 
+            // Group avatars are cached locally by presage after group sync.
+            let avatar_path = match store.group_avatar(master_key).await {
+                Ok(Some(bytes)) => cache_avatar(&avatars_dir, &format!("g-{id}"), "image/jpeg", &bytes),
+                _ => None,
+            };
+
             conversations.push(Conversation {
                 id,
                 name: group.title,
                 last_message,
                 last_timestamp,
                 is_group: true,
+                avatar_path,
             });
         }
 
@@ -963,6 +982,30 @@ async fn download_attachments(
             }
         }
     }
+}
+
+/// Write avatar `bytes` to `<dir>/<key>.<ext>` once and return the absolute
+/// path. `key` must be filename-safe (uuid or hex group id). Re-uses an
+/// existing file (avatars are immutable enough for the session). Returns
+/// `None` on any IO error — a missing avatar just falls back to initials.
+fn cache_avatar(dir: &std::path::Path, key: &str, content_type: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let ext = match content_type {
+        t if t.contains("png") => "png",
+        t if t.contains("webp") => "webp",
+        t if t.contains("gif") => "gif",
+        _ => "jpg",
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return None;
+    }
+    let path = dir.join(format!("{key}.{ext}"));
+    if !path.exists() && std::fs::write(&path, bytes).is_err() {
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
 }
 
 async fn get_last_message_info(

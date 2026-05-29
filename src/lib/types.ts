@@ -21,6 +21,7 @@ export interface Conversation {
   last_message: string | null;
   last_timestamp: number;
   is_group: boolean;
+  avatar_path: string | null;
 }
 
 export interface ChatMessage {
