@@ -1066,6 +1066,29 @@ async fn resolve_sender_name(
         return pick_sender_name(None, sender_uuid_str);
     };
     let service_id = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from(uuid));
+
+    // 1. A saved contact with a name wins.
+    if let Ok(Some(contact)) = store.contact_by_id(&service_id).await {
+        if !contact.name.is_empty() {
+            return contact.name.clone();
+        }
+    }
+
+    // 2. Fall back to a synced/fetched profile name (covers group members who
+    //    aren't saved contacts — the usual "raw UUID in a group" case). Purely
+    //    a local store read; no network.
+    if let Ok(Some(key)) = store.profile_key(&service_id).await {
+        if let Ok(Some(profile)) = store.profile(uuid, key).await {
+            if let Some(name) = profile.name {
+                let joined = name.to_string();
+                if !joined.trim().is_empty() {
+                    return joined;
+                }
+            }
+        }
+    }
+
+    // 3. Phone number, else a short ~uuid handle.
     match store.contact_by_id(&service_id).await {
         Ok(contact_opt) => pick_sender_name(contact_opt.as_ref(), sender_uuid_str),
         Err(_) => pick_sender_name(None, sender_uuid_str),
