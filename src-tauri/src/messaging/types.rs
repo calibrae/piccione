@@ -105,6 +105,14 @@ pub struct MsgRange {
     pub mention_uuid: Option<String>,
 }
 
+/// A poll carried by a message (DataMessage.pollCreate).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PollInfo {
+    pub question: String,
+    pub options: Vec<String>,
+    pub allow_multiple: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -120,6 +128,8 @@ pub struct ChatMessage {
     pub previews: Vec<LinkPreview>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub body_ranges: Vec<MsgRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll: Option<PollInfo>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -264,6 +274,7 @@ mod tests {
             quote: None,
             previews: vec![],
             body_ranges: vec![],
+            poll: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -406,6 +417,7 @@ mod tests {
                 quote: None,
                 previews: vec![],
                 body_ranges: vec![],
+                poll: None,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

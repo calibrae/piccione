@@ -1028,6 +1028,15 @@
                   {/if}
                 </p>
               {/if}
+              {#if msg.poll}
+                <div class="poll">
+                  <div class="poll-q">📊 {msg.poll.question}</div>
+                  {#each msg.poll.options as opt, i}
+                    <div class="poll-opt">{String.fromCharCode(65 + i)}. {opt}</div>
+                  {/each}
+                  {#if msg.poll.allow_multiple}<div class="poll-note">Choix multiples autorisés</div>{/if}
+                </div>
+              {/if}
               {#if msg.previews && msg.previews.length > 0}
                 {#each msg.previews as prev}
                   <button

@@ -148,6 +148,16 @@ fn extract_body_ranges(dm: &DataMessage) -> Vec<crate::messaging::types::MsgRang
         .collect()
 }
 
+/// Extract a poll from DataMessage.pollCreate.
+fn extract_poll(dm: &DataMessage) -> Option<crate::messaging::types::PollInfo> {
+    let pc = dm.poll_create.as_ref()?;
+    Some(crate::messaging::types::PollInfo {
+        question: pc.question.clone().unwrap_or_default(),
+        options: pc.options.clone(),
+        allow_multiple: pc.allow_multiple.unwrap_or(false),
+    })
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -165,8 +175,9 @@ pub(crate) fn content_to_chat_message(
             }
             let body = dm.body.clone();
             let attachments = extract_attachments(dm);
-            // Skip messages with no text and no attachments
-            if body.is_none() && attachments.is_empty() {
+            let poll = extract_poll(dm);
+            // Skip messages with no text, attachments, and no poll.
+            if body.is_none() && attachments.is_empty() && poll.is_none() {
                 return None;
             }
             Some(ChatMessage {
@@ -179,6 +190,7 @@ pub(crate) fn content_to_chat_message(
                 quote: extract_quote(dm),
                 previews: extract_previews(dm),
                 body_ranges: extract_body_ranges(dm),
+                poll: extract_poll(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -189,7 +201,8 @@ pub(crate) fn content_to_chat_message(
                     }
                     let body = dm.body.clone();
                     let attachments = extract_attachments(dm);
-                    if body.is_none() && attachments.is_empty() {
+                    let poll = extract_poll(dm);
+                    if body.is_none() && attachments.is_empty() && poll.is_none() {
                         return None;
                     }
                     return Some(ChatMessage {
@@ -202,6 +215,7 @@ pub(crate) fn content_to_chat_message(
                         quote: extract_quote(dm),
                         previews: extract_previews(dm),
                         body_ranges: extract_body_ranges(dm),
+                        poll: extract_poll(dm),
                     });
                 }
             }
