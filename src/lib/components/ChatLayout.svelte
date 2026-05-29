@@ -29,6 +29,9 @@
   let showMsgSearch = $state(false);
   let scrolledUp = $state(false);
   let highlightTs = $state<number | null>(null);
+  let safetyNumber = $state<string | null>(null);
+  let safetyError = $state<string | null>(null);
+  let showSafety = $state(false);
   let recording = $state(false);
   let mediaRecorder: MediaRecorder | null = null;
   let recordChunks: BlobPart[] = [];
@@ -165,6 +168,19 @@
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     highlightTs = ts;
     setTimeout(() => { if (highlightTs === ts) highlightTs = null; }, 1600);
+  }
+
+  async function openSafetyNumber() {
+    const convo = activeConversation;
+    if (!convo || convo.is_group) return;
+    showSafety = true;
+    safetyNumber = null;
+    safetyError = null;
+    try {
+      safetyNumber = await invoke<string>("get_safety_number", { uuid: convo.id });
+    } catch (e) {
+      safetyError = String(e);
+    }
   }
 
   function scrollToBottom() {
@@ -839,6 +855,16 @@
             📞
           </button>
         {/if}
+        {#if !activeConversation.is_group}
+          <button
+            class="icon-btn"
+            onclick={openSafetyNumber}
+            title="Numéro de sécurité"
+            aria-label="Numéro de sécurité"
+          >
+            🔒
+          </button>
+        {/if}
         <button
           class="icon-btn"
           onclick={() => messagingStore.toggleMute(activeConversation.id)}
@@ -1100,6 +1126,26 @@
   conversationId={messagingStore.activeConversationId}
   conversationName={activeConversation?.name ?? ""}
 />
+
+{#if showSafety}
+  <div class="lightbox" role="dialog" aria-modal="true" aria-label="Numéro de sécurité"
+       onclick={(e) => { if (e.currentTarget === e.target) showSafety = false; }}
+       onkeydown={(e) => { if (e.key === "Escape") showSafety = false; }}
+       tabindex="-1">
+    <div class="safety-card">
+      <h3>Numéro de sécurité</h3>
+      {#if safetyError}
+        <p class="error">{safetyError}</p>
+      {:else if safetyNumber}
+        <p class="safety-digits">{safetyNumber}</p>
+        <p class="muted small">Comparez ce numéro avec votre contact (en personne ou par un autre canal) pour vérifier que la conversation est chiffrée de bout en bout sans interception.</p>
+      {:else}
+        <p class="muted">Calcul…</p>
+      {/if}
+      <button class="secondary-btn" onclick={() => (showSafety = false)}>Fermer</button>
+    </div>
+  </div>
+{/if}
 
 {#if lightboxSrc}
   <div

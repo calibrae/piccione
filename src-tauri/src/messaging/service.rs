@@ -77,6 +77,11 @@ enum SendRequest {
         uuid: Uuid,
         reply: oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Compute the safety number (identity fingerprint) for a 1:1 contact.
+    SafetyNumber {
+        uuid: Uuid,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Update our own profile (display name + optional about).
     UpdateProfile {
         given_name: String,
@@ -392,6 +397,21 @@ impl MessagingService {
                 started,
             });
         }
+    }
+
+    /// Compute the safety number for a contact — the 60-digit identity
+    /// fingerprint Signal shows for out-of-band verification. Uses libsignal's
+    /// own Fingerprint with the exact inputs Signal-Desktop uses (iterations
+    /// 5200, version 2, 16-byte ACI identifiers), so the number matches the
+    /// official client.
+    pub async fn safety_number(&self, uuid: Uuid) -> Result<String, String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::SafetyNumber { uuid, reply: reply_tx })
+            .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "safety number reply dropped".to_string())?
     }
 
     /// Set our own profile display name (and optional about line).
@@ -1070,6 +1090,10 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             };
             let _ = reply.send(result);
         }
+        SendRequest::SafetyNumber { uuid, reply } => {
+            let result = do_safety_number(mgr, uuid).await;
+            let _ = reply.send(result);
+        }
         SendRequest::UpdateProfile {
             given_name,
             family_name,
@@ -1178,6 +1202,67 @@ async fn do_send_delete(
 
 /// Send a `TypingMessage` (start/stop) to a 1:1 conversation. Groups are
 /// skipped for now (they need the group_id set on the message).
+/// Compute a contact's safety number. Mirrors Signal-Desktop's
+/// `generateSafetyNumber` exactly: libsignal `Fingerprint` with
+/// ITERATION_COUNT=5200, SERVICE_ID_VERSION=2, and the 16-byte ACI UUIDs as
+/// the local/remote identifiers — so the result matches the official client.
+async fn do_safety_number(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    their_uuid: Uuid,
+) -> Result<String, String> {
+    use presage::libsignal_service::protocol::{
+        DeviceId, Fingerprint, IdentityKeyStore, ProtocolAddress,
+    };
+
+    const ITERATIONS: u32 = 5200;
+    const SERVICE_ID_VERSION: u32 = 2;
+
+    let our_aci = mgr
+        .registration_data()
+        .service_ids
+        .aci;
+    let store = mgr.store().aci_protocol_store();
+    let our_key_pair = store
+        .get_identity_key_pair()
+        .await
+        .map_err(|e| format!("no local identity key: {e}"))?;
+    let our_identity_key = our_key_pair.identity_key();
+
+    // get_identity keys by address name only; device id is irrelevant.
+    let device = DeviceId::new(1).expect("device id 1 is valid");
+    let their_addr = ProtocolAddress::new(their_uuid.to_string(), device);
+    let their_identity_key = store
+        .get_identity(&their_addr)
+        .await
+        .map_err(|e| format!("identity lookup failed: {e}"))?
+        .ok_or_else(|| {
+            "no identity on file for this contact yet — exchange a message first"
+                .to_string()
+        })?;
+
+    let fingerprint = Fingerprint::new(
+        SERVICE_ID_VERSION,
+        ITERATIONS,
+        our_aci.as_bytes(),
+        our_identity_key,
+        their_uuid.as_bytes(),
+        &their_identity_key,
+    )
+    .map_err(|e| format!("fingerprint error: {e}"))?;
+
+    let digits = fingerprint
+        .display_string()
+        .map_err(|e| format!("display error: {e}"))?;
+
+    // Group into space-separated 5-digit blocks, like the official client.
+    let blocks: Vec<String> = digits
+        .as_bytes()
+        .chunks(5)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect();
+    Ok(blocks.join(" "))
+}
+
 async fn do_send_typing(
     mgr: &mut Manager<SqliteStore, Registered>,
     conversation_id: &str,
