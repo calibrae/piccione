@@ -29,6 +29,9 @@
   let showMsgSearch = $state(false);
   let scrolledUp = $state(false);
   let highlightTs = $state<number | null>(null);
+  let recording = $state(false);
+  let mediaRecorder: MediaRecorder | null = null;
+  let recordChunks: BlobPart[] = [];
   let msgSearch = $state("");
 
   onMount(async () => {
@@ -586,6 +589,56 @@
   // Paste an image straight into the composer: grab the bitmap off the
   // clipboard, hand the bytes to the backend for a temp file, and queue it
   // like any other attachment.
+  function pickAudioMime(): { mime: string; ext: string } {
+    const candidates: { mime: string; ext: string }[] = [
+      { mime: "audio/mp4", ext: "m4a" },
+      { mime: "audio/ogg;codecs=opus", ext: "ogg" },
+      { mime: "audio/webm;codecs=opus", ext: "weba" },
+      { mime: "audio/webm", ext: "weba" },
+    ];
+    for (const c of candidates) {
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c.mime)) return c;
+    }
+    return { mime: "", ext: "m4a" };
+  }
+
+  async function toggleRecording() {
+    if (recording) { stopRecording(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const { mime, ext } = pickAudioMime();
+      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recordChunks = [];
+      mediaRecorder.ondataavailable = (ev) => { if (ev.data.size) recordChunks.push(ev.data); };
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordChunks, { type: mediaRecorder?.mimeType || "audio/mp4" });
+        recordChunks = [];
+        if (blob.size === 0) return;
+        try {
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          const path = await invoke<string>("save_pasted_image", {
+            bytes: Array.from(buf),
+            extension: ext,
+          });
+          pendingFiles = [...pendingFiles, path];
+        } catch (e) {
+          console.error("save voice note failed:", e);
+        }
+      };
+      mediaRecorder.start();
+      recording = true;
+    } catch (e) {
+      console.error("recording failed (mic permission?):", e);
+      recording = false;
+    }
+  }
+  function stopRecording() {
+    recording = false;
+    try { mediaRecorder?.stop(); } catch { /* ignore */ }
+    mediaRecorder = null;
+  }
+
   async function handlePaste(e: ClipboardEvent) {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -1022,6 +1075,13 @@
           onpaste={handlePaste}
           oninput={(e) => { autosize(e); pokeTyping(); }}
         ></textarea>
+        <button
+          class="attach-btn"
+          class:recording
+          onclick={toggleRecording}
+          title={recording ? "Arrêter l'enregistrement" : "Message vocal"}
+          aria-label="Message vocal"
+        >{recording ? "⏹" : "🎙"}</button>
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
 
