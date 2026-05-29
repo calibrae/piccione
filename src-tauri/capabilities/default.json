@@ -8,6 +8,9 @@
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
-    "dialog:default"
+    "dialog:default",
+    "opener:default",
+    "opener:allow-open-url",
+    "opener:allow-open-path"
   ]
 }

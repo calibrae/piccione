@@ -1,6 +1,6 @@
 [package]
 name = "piccione"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 default-run = "piccione"
 
@@ -48,11 +48,20 @@ mime_guess = "2"
 prost = "0.13"
 clap = { version = "4", features = ["derive"] }
 
+# Voice calls. RingRTC is Signal's own Rust WebRTC engine. The
+# prebuilt_webrtc feature makes its build.rs download a prebuilt
+# libwebrtc.a from build-artifacts.signal.org instead of compiling
+# Chromium — verified working on macOS/Linux/Windows (Phase-0 spike).
+# Needs PREBUILT_WEBRTC=1 in the build env (see CI + README).
+ringrtc = { git = "https://github.com/signalapp/ringrtc", tag = "v2.69.0", features = ["prebuilt_webrtc"] }
+log = "0.4"  # ringrtc::webrtc::logging::set_logger wants a log::LevelFilter
+
 # mimalloc as global allocator. macOS default malloc holds onto freed pages
 # very aggressively, inflating RSS after one-shot allocations like the
 # Storage-Service contact sync. mimalloc with the default "purge after idle"
 # behaviour returns pages to the OS, cutting steady-state RSS by ~30-50%.
 mimalloc = { version = "0.1", default-features = false }
+tauri-plugin-opener = "2"
 
 [dev-dependencies]
 mockall = "0.13"
@@ -75,12 +84,12 @@ libsignal-service = { path = "../../libsignal-service-rs" }
 
 [profile.release]
 # Tighter binary + slightly lower RSS for the consumer-shipped build.
-# lto=fat enables full link-time optimisation across crate boundaries
-# (saves ~10-15%% binary size, helps inlining hot loops).
-# codegen-units=1 produces a single compilation unit, lets the optimiser
-# see across the whole crate — smaller binary, longer build (~2x).
-# strip=symbols drops debuginfo from the binary itself; backtraces still
-# work via dSYM if we want.
-lto = "fat"
+# LTO is OFF: RingRTC links a prebuilt WebRTC static lib with no LLVM
+# bitcode (.llvmbc), and fat/thin LTO both abort trying to merge it
+# ("failed to get bitcode from object file for LTO"). Correctness over the
+# ~10-15%% size win; revisit per-package LTO tuning later if RSS matters.
+# codegen-units=1 still gives the optimiser a single unit per crate.
+# strip=symbols drops debuginfo from the binary itself.
+lto = false
 codegen-units = 1
 strip = "symbols"

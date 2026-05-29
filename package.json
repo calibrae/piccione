@@ -1,7 +1,7 @@
 {
   "name": "piccione",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,8 +14,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "~2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "svelte": "^5"
   },
   "devDependencies": {

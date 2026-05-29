@@ -5,6 +5,8 @@
   import LinkDevice from "./lib/components/LinkDevice.svelte";
   import ChatLayout from "./lib/components/ChatLayout.svelte";
   import ToastContainer from "./lib/components/ToastContainer.svelte";
+  import CallOverlay from "./lib/components/CallOverlay.svelte";
+  import { callingStore } from "./lib/stores/calling.svelte";
 
   let loading = $state(true);
   let teardown: (() => Promise<void>) | null = null;
@@ -14,6 +16,7 @@
     // HMR / app restart in dev doesn't pile up duplicate subscriptions.
     teardown = await messagingStore.initListeners();
     await provisioningStore.checkLinkStatus();
+    await callingStore.refresh();
     loading = false;
   });
 
@@ -39,6 +42,7 @@
 {/if}
 
 <ToastContainer />
+<CallOverlay />
 
 <style>
   .loading {

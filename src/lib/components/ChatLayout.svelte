@@ -2,10 +2,12 @@
   import { onMount } from "svelte";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { messagingStore } from "../stores/messaging.svelte";
   import { settingsStore } from "../stores/settings.svelte";
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
+  import { callingStore } from "../stores/calling.svelte";
 
   let inputText = $state("");
   let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -233,11 +235,76 @@
   async function openAttachment(att: { local_path: string | null }) {
     if (!att.local_path) return;
     try {
-      // Best-effort: open the file in the system handler if the opener plugin is wired.
-      // Fallback: convertFileSrc + window.open lets WebKit preview most types.
-      window.open(convertFileSrc(att.local_path), "_blank");
+      // Open in the OS default handler via the opener plugin.
+      await openPath(att.local_path);
     } catch (e) {
       console.error("Open attachment failed:", e);
+      // Fallback: let WebKit preview it in a new view.
+      try {
+        window.open(convertFileSrc(att.local_path), "_blank");
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  // Split a message body into plain-text and URL segments so URLs render as
+  // clickable links. Matches http(s):// and bare www. hosts.
+  const URL_RE = /(\bhttps?:\/\/[^\s<]+|\bwww\.[^\s<]+)/gi;
+  function linkify(body: string): { text: string; href: string | null }[] {
+    const out: { text: string; href: string | null }[] = [];
+    let last = 0;
+    for (const m of body.matchAll(URL_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > last) out.push({ text: body.slice(last, idx), href: null });
+      // Don't swallow trailing sentence punctuation into the link.
+      let url = m[0];
+      let trailing = "";
+      while (/[).,!?;:]$/.test(url)) {
+        trailing = url.slice(-1) + trailing;
+        url = url.slice(0, -1);
+      }
+      const href = url.startsWith("www.") ? `https://${url}` : url;
+      out.push({ text: url, href });
+      if (trailing) out.push({ text: trailing, href: null });
+      last = idx + m[0].length;
+    }
+    if (last < body.length) out.push({ text: body.slice(last), href: null });
+    return out;
+  }
+
+  async function openExternal(href: string) {
+    try {
+      await openUrl(href);
+    } catch (e) {
+      console.error("openUrl failed:", e);
+    }
+  }
+
+  // Paste an image straight into the composer: grab the bitmap off the
+  // clipboard, hand the bytes to the backend for a temp file, and queue it
+  // like any other attachment.
+  async function handlePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        try {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          const ext = item.type.split("/")[1] || "png";
+          const path = await invoke<string>("save_pasted_image", {
+            bytes: Array.from(buf),
+            extension: ext,
+          });
+          pendingFiles = [...pendingFiles, path];
+        } catch (err) {
+          console.error("paste image failed:", err);
+        }
+        return;
+      }
     }
   }
 </script>
@@ -371,6 +438,21 @@
     {:else if activeConversation}
       <div class="chat-header">
         <h2>{activeConversation.name}</h2>
+        {#if !activeConversation.is_group}
+          <button
+            class="icon-btn"
+            onclick={() =>
+              callingStore.startCall(
+                activeConversation.id,
+                activeConversation.name,
+              )}
+            disabled={callingStore.active}
+            title="Appel vocal"
+            aria-label="Appel vocal"
+          >
+            📞
+          </button>
+        {/if}
         <button
           class="icon-btn"
           onclick={() => (showMedia = true)}
@@ -427,7 +509,19 @@
                 </div>
               {/if}
               {#if msg.body}
-                <p>{msg.body}</p>
+                <p>
+                  {#each linkify(msg.body) as seg}
+                    {#if seg.href}
+                      <a
+                        href={seg.href}
+                        class="msg-link"
+                        onclick={(e) => {
+                          e.preventDefault();
+                          openExternal(seg.href!);
+                        }}>{seg.text}</a>
+                    {:else}{seg.text}{/if}
+                  {/each}
+                </p>
               {/if}
               <span class="msg-time">{formatTime(msg.timestamp)}</span>
               {#if msg.is_outgoing}
@@ -459,6 +553,7 @@
           placeholder="Message…"
           bind:value={inputText}
           onkeydown={handleKeydown}
+          onpaste={handlePaste}
         />
         <button class="send-btn" onclick={handleSend}>Envoyer</button>
       </div>
@@ -494,6 +589,15 @@
 {/if}
 
 <style>
+  .msg-link {
+    color: var(--accent, #3b82f6);
+    text-decoration: underline;
+    word-break: break-all;
+    cursor: pointer;
+  }
+  .message.outgoing .msg-link {
+    color: #cfe0ff;
+  }
   .receipt {
     font-size: 0.78rem;
     margin-left: 4px;

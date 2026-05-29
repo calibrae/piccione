@@ -28,6 +28,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # RingRTC: download a prebuilt WebRTC blob instead of building Chromium.
+  PREBUILT_WEBRTC: "1"
 
 permissions:
   contents: write
@@ -134,6 +136,9 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
+            libpulse-dev \
+            libasound2-dev \
+            cmake \
             rpm
 
       # --- Patch overrides for CI ---------------------------------------------
@@ -171,6 +176,12 @@ jobs:
           PY
 
       - run: npm ci
+
+      # --- macOS system deps --------------------------------------------------
+
+      - name: install macos build deps
+        if: startsWith(matrix.platform.runner, 'macos')
+        run: brew install coreutils cmake
 
       # --- macOS signing setup ------------------------------------------------
 

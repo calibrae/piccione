@@ -1,5 +1,5 @@
 use tauri::{AppHandle, Manager};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::app_state::AppState;
 use crate::messaging::types::{ChatMessage, Conversation};
@@ -57,7 +57,11 @@ pub async fn send_to_recipient(
     recipient_id: String,
     body: String,
 ) -> Result<(), String> {
-    info!("send_to_recipient called: {} -> {}", recipient_id, body.len());
+    info!(
+        "send_to_recipient called: {} -> {}",
+        recipient_id,
+        body.len()
+    );
     let state = app.state::<AppState>();
     let result = state.messaging.send_message(&recipient_id, &body).await;
     match &result {
@@ -75,7 +79,11 @@ pub async fn send_message_with_attachments(
     body: String,
     file_paths: Vec<String>,
 ) -> Result<(), String> {
-    info!("send_message_with_attachments: {} files to {}", file_paths.len(), conversation_id);
+    info!(
+        "send_message_with_attachments: {} files to {}",
+        file_paths.len(),
+        conversation_id
+    );
     let state = app.state::<AppState>();
     let result = state
         .messaging
@@ -149,4 +157,45 @@ pub async fn get_conversation_media(
         .messaging
         .get_conversation_media(&conversation_id)
         .await
+}
+
+/// Persist a pasted/dropped image (raw bytes from the WebView clipboard) to a
+/// temp file and return its absolute path, so the frontend can feed it into
+/// `send_message_with_attachments` exactly like a file-picker selection.
+///
+/// The WebView can't hand a real filesystem path for clipboard image data, so
+/// we round-trip the bytes through the backend. Files land in the app cache
+/// dir under `pasted/`; they're transient (the OS clears cache eventually) and
+/// presage copies its own attachment on send.
+#[tauri::command]
+pub async fn save_pasted_image(
+    app: AppHandle,
+    bytes: Vec<u8>,
+    extension: String,
+) -> Result<String, String> {
+    // Whitelist the extension to a short alphanumeric token — this value ends
+    // up in a filename, so don't trust the WebView with path separators.
+    let ext: String = extension
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(5)
+        .collect::<String>()
+        .to_lowercase();
+    let ext = if ext.is_empty() { "png".to_string() } else { ext };
+
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache dir: {e}"))?
+        .join("pasted");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("paste-{ts}.{ext}"));
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+
+    Ok(path.to_string_lossy().into_owned())
 }
