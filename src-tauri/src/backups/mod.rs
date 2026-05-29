@@ -302,6 +302,25 @@ pub async fn extract_backup(
 ) -> Result<ImportedData, String> {
     use libsignal_message_backup::frame::{CursorFactory, FramesReader};
     use libsignal_message_backup::parse::VarintDelimitedReader;
+
+    let frames = FramesReader::new(key, CursorFactory::new(bytes))
+        .await
+        .map_err(|e| format!("open frames: {e}"))?;
+    extract_from_reader(VarintDelimitedReader::new(frames), self_uuid).await
+}
+
+/// Reader-generic extraction core: consumes a varint-delimited frame stream
+/// (post-decrypt, or a plaintext test stream) and builds the importable data.
+/// Split out so the recipient/chat/item → store reconstruction is unit-tested
+/// against synthetic frames without needing a real encrypted archive.
+#[cfg(feature = "backups")]
+async fn extract_from_reader<R>(
+    mut reader: libsignal_message_backup::parse::VarintDelimitedReader<R>,
+    self_uuid: uuid::Uuid,
+) -> Result<ImportedData, String>
+where
+    R: futures::io::AsyncRead + Unpin,
+{
     use libsignal_message_backup::proto::backup as pb;
     use presage::libsignal_service::content::{Content, ContentBody, Metadata};
     use presage::libsignal_service::proto::DataMessage;
@@ -310,10 +329,6 @@ pub async fn extract_backup(
     use protobuf3::Message;
     use std::collections::HashMap;
 
-    let frames = FramesReader::new(key, CursorFactory::new(bytes))
-        .await
-        .map_err(|e| format!("open frames: {e}"))?;
-    let mut reader = VarintDelimitedReader::new(frames);
     reader.read_next().await.map_err(|e| format!("read header: {e}"))?.ok_or("empty backup")?;
 
     let mut contacts = Vec::new();
@@ -395,4 +410,84 @@ pub async fn extract_backup(
         }
     }
     Ok(ImportedData { contacts, messages })
+}
+
+
+#[cfg(all(test, feature = "backups"))]
+mod message_import_tests {
+    use super::*;
+    use libsignal_message_backup::proto::backup as pb;
+    use protobuf3::Message;
+
+    // varint-length-delimited concat of protos, as VarintDelimitedReader expects.
+    fn delimited(msgs: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for m in msgs {
+            let mut os = protobuf3::CodedOutputStream::vec(&mut out);
+            os.write_raw_varint32(m.len() as u32).unwrap();
+            os.write_raw_bytes(m).unwrap();
+            os.flush().unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn reconstructs_a_1to1_text_message() {
+        let me = uuid::Uuid::from_bytes([1u8; 16]);
+        let peer = uuid::Uuid::from_bytes([2u8; 16]);
+
+        let info = pb::BackupInfo::new();
+
+        let mut contact = pb::Contact::new();
+        contact.aci = Some(peer.as_bytes().to_vec());
+        contact.profileGivenName = Some("Bob".to_string());
+        let mut rec = pb::Recipient::new();
+        rec.id = 5;
+        rec.destination = Some(pb::recipient::Destination::Contact(contact));
+        let mut f_rec = pb::Frame::new();
+        f_rec.item = Some(pb::frame::Item::Recipient(rec));
+
+        let mut chat = pb::Chat::new();
+        chat.id = 9;
+        chat.recipientId = 5;
+        let mut f_chat = pb::Frame::new();
+        f_chat.item = Some(pb::frame::Item::Chat(chat));
+
+        let mut text = pb::Text::new();
+        text.body = "hello from backup".to_string();
+        let mut sm = pb::StandardMessage::new();
+        sm.text = Some(text).into();
+        let mut item = pb::ChatItem::new();
+        item.chatId = 9;
+        item.authorId = 5;
+        item.dateSent = 1_700_000_000_000;
+        item.item = Some(pb::chat_item::Item::StandardMessage(sm));
+        let mut f_item = pb::Frame::new();
+        f_item.item = Some(pb::frame::Item::ChatItem(item));
+
+        let bytes = delimited(&[
+            info.write_to_bytes().unwrap(),
+            f_rec.write_to_bytes().unwrap(),
+            f_chat.write_to_bytes().unwrap(),
+            f_item.write_to_bytes().unwrap(),
+        ]);
+
+        let reader = libsignal_message_backup::parse::VarintDelimitedReader::new(
+            futures::io::Cursor::new(bytes),
+        );
+        let data = futures::executor::block_on(extract_from_reader(reader, me))
+            .expect("extract");
+
+        assert_eq!(data.contacts.len(), 1, "one contact");
+        assert_eq!(data.contacts[0].name, "Bob");
+        assert_eq!(data.messages.len(), 1, "one message");
+        let (thread, content) = &data.messages[0];
+        assert!(matches!(thread, presage::store::Thread::Contact(_)));
+        if let presage::libsignal_service::content::ContentBody::DataMessage(dm) = &content.body {
+            assert_eq!(dm.body.as_deref(), Some("hello from backup"));
+            assert_eq!(dm.timestamp, Some(1_700_000_000_000));
+        } else {
+            panic!("expected DataMessage");
+        }
+    }
 }
