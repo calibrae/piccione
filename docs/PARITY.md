@@ -56,6 +56,15 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 10 (merged to main) — first Tier-B features
+
+- ✅ **Polls** (render + vote + live tally) — turned out to be DataMessage fields (pollCreate/pollVote), not a codec, so achievable with the standard pattern.
+
+**30 features merged. Coverage ~12 → ~37 of ~210.** Reclassification: polls were
+mis-filed as Tier B — they're DataMessage-level and shipped. The *true* codec-gated
+Tier B remains: Backups.proto/Link & Sync, group v2 create/management (zkgroup),
+stories (separate StoryMessage subsystem).
+
 ## Shipped — wave 9 (merged to main) — TIER A COMPLETE
 
 - ✅ Safety numbers (libsignal Fingerprint; matches the official client — Signal-Desktop's exact recipe: 5200 iters, v2, 16-byte ACI ids, store identity keys)
