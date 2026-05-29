@@ -361,12 +361,19 @@
       })
   );
 
-  // Auto-scroll when messages change. messagesContainer is now $state-tracked,
-  // so this effect fires both on container mount and on message-list growth.
+  // Auto-scroll on message-list growth — but don't yank the view if the user
+  // has scrolled up to read history. Always jump to bottom on a conversation
+  // switch (tracked via lastScrollConvId).
+  let lastScrollConvId: string | null = null;
   $effect(() => {
     const container = messagesContainer;
     const count = activeMessages.length;
-    if (count > 0 && container) {
+    const convId = messagingStore.activeConversationId;
+    if (count === 0 || !container) return;
+    const switched = convId !== lastScrollConvId;
+    lastScrollConvId = convId;
+    if (switched) scrolledUp = false;
+    if (switched || !scrolledUp) {
       requestAnimationFrame(() => {
         container.scrollTop = container.scrollHeight;
       });
