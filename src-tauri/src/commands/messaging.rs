@@ -200,3 +200,26 @@ pub async fn save_pasted_image(
 
     Ok(path.to_string_lossy().into_owned())
 }
+
+/// Send or remove an emoji reaction to a message.
+#[tauri::command]
+pub async fn send_reaction(
+    app: AppHandle,
+    conversation_id: String,
+    target_author_uuid: String,
+    target_timestamp: u64,
+    emoji: String,
+    remove: bool,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .messaging
+        .send_reaction(
+            &conversation_id,
+            &target_author_uuid,
+            target_timestamp,
+            &emoji,
+            remove,
+        )
+        .await
+}

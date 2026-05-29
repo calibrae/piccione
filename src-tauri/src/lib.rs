@@ -180,6 +180,7 @@ pub fn run() {
             commands::messaging::mark_conversation_read,
             commands::messaging::get_conversation_media,
             commands::messaging::save_pasted_image,
+            commands::messaging::send_reaction,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,

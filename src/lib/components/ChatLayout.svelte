@@ -246,6 +246,43 @@
     return "";
   }
 
+  const QUICK_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+  let reactingTo = $state<number | null>(null);
+
+  function reactionsFor(msg: ChatMessage): { emoji: string; count: number; mine: boolean }[] {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return [];
+    const perMsg = messagingStore.reactions.get(cid)?.get(String(msg.timestamp));
+    if (!perMsg) return [];
+    const me = messagingStore.selfId ?? "";
+    const counts = new Map<string, { count: number; mine: boolean }>();
+    for (const [sender, emoji] of perMsg) {
+      if (!emoji) continue;
+      const c = counts.get(emoji) ?? { count: 0, mine: false };
+      c.count += 1;
+      if (sender === me) c.mine = true;
+      counts.set(emoji, c);
+    }
+    return [...counts.entries()].map(([emoji, c]) => ({ emoji, ...c }));
+  }
+
+  function myReaction(msg: ChatMessage): string | null {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return null;
+    const me = messagingStore.selfId ?? "";
+    return messagingStore.reactions.get(cid)?.get(String(msg.timestamp))?.get(me) ?? null;
+  }
+
+  function toggleReaction(msg: ChatMessage, emoji: string) {
+    const cid = messagingStore.activeConversationId;
+    if (!cid) return;
+    reactingTo = null;
+    const mine = myReaction(msg);
+    // Tapping your current emoji removes it; otherwise (re)set to the new one.
+    const remove = mine === emoji;
+    messagingStore.sendReaction(cid, msg.sender_id, msg.timestamp, emoji, remove);
+  }
+
   function openLightbox(src: string) {
     lightboxSrc = src;
   }
@@ -496,12 +533,27 @@
       <div class="messages" data-testid="messages-container" bind:this={messagesContainer}>
         {#each activeMessages as msg}
           <div class="message" class:outgoing={msg.is_outgoing}>
-            <button
-              class="reply-action"
-              title="Répondre"
-              aria-label="Répondre"
-              onclick={() => startReply(msg)}
-            >↩</button>
+            <div class="msg-actions">
+              <button
+                class="reply-action"
+                title="Réagir"
+                aria-label="Réagir"
+                onclick={() => (reactingTo = reactingTo === msg.timestamp ? null : msg.timestamp)}
+              >☺</button>
+              <button
+                class="reply-action"
+                title="Répondre"
+                aria-label="Répondre"
+                onclick={() => startReply(msg)}
+              >↩</button>
+            </div>
+            {#if reactingTo === msg.timestamp}
+              <div class="emoji-picker">
+                {#each QUICK_EMOJI as e}
+                  <button class="emoji-opt" onclick={() => toggleReaction(msg, e)}>{e}</button>
+                {/each}
+              </div>
+            {/if}
             <div class="bubble">
               {#if msg.quote}
                 <div class="quote-bar">
@@ -585,6 +637,17 @@
                 <span class="receipt receipt-{r}" title={r} aria-label={r}>
                   {#if r === "sent"}✓{:else}✓✓{/if}
                 </span>
+              {/if}
+              {#if reactionsFor(msg).length > 0}
+                <div class="reaction-chips">
+                  {#each reactionsFor(msg) as chip}
+                    <button
+                      class="reaction-chip"
+                      class:mine={chip.mine}
+                      onclick={() => toggleReaction(msg, chip.emoji)}
+                    >{chip.emoji}{#if chip.count > 1}<span class="rc-count">{chip.count}</span>{/if}</button>
+                  {/each}
+                </div>
               {/if}
             </div>
           </div>
@@ -706,11 +769,25 @@
   .message {
     position: relative;
   }
-  .reply-action {
+  .msg-actions {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
+    display: flex;
+    gap: 2px;
     opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .message:not(.outgoing) .msg-actions {
+    right: -62px;
+  }
+  .message.outgoing .msg-actions {
+    left: -62px;
+  }
+  .message:hover .msg-actions {
+    opacity: 1;
+  }
+  .reply-action {
     border: none;
     background: var(--bg-secondary, #16213e);
     color: var(--text-secondary, #a1a1aa);
@@ -719,17 +796,53 @@
     height: 26px;
     cursor: pointer;
     font-size: 0.9rem;
-    transition: opacity 0.12s;
   }
-  .message:not(.outgoing) .reply-action {
-    right: -32px;
+  .emoji-picker {
+    position: absolute;
+    top: -6px;
+    z-index: 10;
+    display: flex;
+    gap: 2px;
+    padding: 4px 6px;
+    background: var(--bg-secondary, #16213e);
+    border: 1px solid var(--border, #27272a);
+    border-radius: 18px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   }
-  .message.outgoing .reply-action {
-    left: -32px;
+  .message:not(.outgoing) .emoji-picker { left: 0; }
+  .message.outgoing .emoji-picker { right: 0; }
+  .emoji-opt {
+    border: none;
+    background: transparent;
+    font-size: 1.15rem;
+    cursor: pointer;
+    border-radius: 50%;
+    padding: 2px 4px;
   }
-  .message:hover .reply-action {
-    opacity: 1;
+  .emoji-opt:hover { background: rgba(127, 127, 127, 0.18); }
+  .reaction-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
   }
+  .reaction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border: 1px solid var(--border, #27272a);
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 12px;
+    padding: 1px 7px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  .reaction-chip.mine {
+    border-color: var(--accent, #3b82f6);
+    background: rgba(59, 130, 246, 0.18);
+  }
+  .rc-count { font-size: 0.72rem; color: var(--text-secondary, #a1a1aa); }
   .reply-preview {
     display: flex;
     align-items: center;

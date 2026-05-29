@@ -53,6 +53,15 @@ enum SendRequest {
         recipient_uuid: Uuid,
         call_message: presage::libsignal_service::proto::CallMessage,
     },
+    /// Send (or remove) an emoji reaction to a message in a conversation.
+    Reaction {
+        conversation_id: String,
+        target_author_uuid: String,
+        target_timestamp: u64,
+        emoji: String,
+        remove: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Core messaging service.
@@ -319,6 +328,31 @@ impl MessagingService {
         reply_rx
             .await
             .map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Send (or remove) an emoji reaction to a target message.
+    pub async fn send_reaction(
+        &self,
+        conversation_id: &str,
+        target_author_uuid: &str,
+        target_timestamp: u64,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Reaction {
+            conversation_id: conversation_id.to_string(),
+            target_author_uuid: target_author_uuid.to_string(),
+            target_timestamp,
+            emoji: emoji.to_string(),
+            remove,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "send reply dropped".to_string())?
     }
 
     /// Send a receipt (DELIVERY / READ / VIEWED) back to a recipient for one
@@ -771,6 +805,28 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
                 error!("call message send failed: {}", e);
             }
         }
+        SendRequest::Reaction {
+            conversation_id,
+            target_author_uuid,
+            target_timestamp,
+            emoji,
+            remove,
+            reply,
+        } => {
+            let result = do_send_reaction(
+                mgr,
+                &conversation_id,
+                &target_author_uuid,
+                target_timestamp,
+                &emoji,
+                remove,
+            )
+            .await;
+            if let Err(ref e) = result {
+                error!("reaction send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -826,6 +882,47 @@ async fn do_send_receipt(
     mgr.send_message(recipient, ContentBody::ReceiptMessage(receipt), envelope_ts)
         .await
         .map_err(|e| format!("send_receipt: {}", e))
+}
+
+/// Send a `DataMessage.reaction` (add or remove) to the target message's
+/// thread. `target_author_uuid` is the ACI of the message being reacted to.
+async fn do_send_reaction(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_author_uuid: &str,
+    target_timestamp: u64,
+    emoji: &str,
+    remove: bool,
+) -> Result<(), String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+
+    let reaction = Reaction {
+        emoji: Some(emoji.to_string()),
+        remove: Some(remove),
+        target_author_aci: Some(target_author_uuid.to_string()),
+        target_sent_timestamp: Some(target_timestamp),
+        ..Default::default()
+    };
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        reaction: Some(reaction),
+        ..Default::default()
+    };
+
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send reaction: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group reaction: {e}")),
+    }
 }
 
 async fn do_send(

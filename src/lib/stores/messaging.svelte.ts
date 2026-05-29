@@ -257,6 +257,37 @@ export function createMessagingStore() {
     }
   }
 
+  async function sendReaction(
+    conversationId: string,
+    targetAuthorUuid: string,
+    targetTimestamp: number,
+    emoji: string,
+    remove: boolean
+  ) {
+    try {
+      await invoke("send_reaction", {
+        conversationId,
+        targetAuthorUuid,
+        targetTimestamp,
+        emoji,
+        remove,
+      });
+      // Optimistic local update so the chip flips instantly.
+      const perChat = reactions.get(conversationId) ?? new Map();
+      const key = String(targetTimestamp);
+      const perMsg = perChat.get(key) ?? new Map();
+      const me = selfId ?? "";
+      if (remove) perMsg.delete(me);
+      else perMsg.set(me, emoji);
+      if (perMsg.size === 0) perChat.delete(key);
+      else perChat.set(key, perMsg);
+      reactions.set(conversationId, perChat);
+      reactions = new Map(reactions);
+    } catch (e) {
+      console.error("send_reaction failed:", e);
+    }
+  }
+
   return {
     get conversations() {
       return conversations;
@@ -302,6 +333,7 @@ export function createMessagingStore() {
     sendMessageWithAttachments,
     sendToRecipient,
     loadSelfId,
+    sendReaction,
   };
 }
 
