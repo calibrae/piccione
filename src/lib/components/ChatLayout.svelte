@@ -162,13 +162,19 @@
     }
   });
 
-  // Reflect total unread on the dock/taskbar badge.
+  // Reflect total unread on the dock/taskbar badge. Guarded so it no-ops
+  // outside the Tauri runtime (e.g. vitest/jsdom).
   $effect(() => {
     let total = 0;
     for (const n of messagingStore.unread.values()) total += n;
-    getCurrentWindow()
-      .setBadgeCount(total > 0 ? total : undefined)
-      .catch(() => {});
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    try {
+      getCurrentWindow()
+        .setBadgeCount(total > 0 ? total : undefined)
+        .catch(() => {});
+    } catch {
+      /* not in a Tauri window */
+    }
   });
 
   function handleKeydown(e: KeyboardEvent) {
