@@ -4,6 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app_state;
 mod calling;
+mod backups;
 mod commands;
 mod messaging;
 pub mod pair_flow;
