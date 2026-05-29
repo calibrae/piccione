@@ -70,7 +70,7 @@ jobs:
             # Voice OFF on Windows: RingRTC's bundled BoringSSL collides with
             # SQLCipher's OpenSSL at link time (LNK2005). Ships messaging-only
             # until that's resolved; macOS/Linux keep voice.
-            build_flags: "--no-default-features"
+            build_flags: "-- --no-default-features"
             artifact_glob: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
@@ -227,11 +227,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose -- ${{ matrix.platform.build_flags }}
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose ${{ matrix.platform.build_flags }}
 
       - name: build (linux/windows)
         if: "!startsWith(matrix.platform.runner, 'macos')"
-        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose -- ${{ matrix.platform.build_flags }}
+        run: npm run tauri build -- --target ${{ matrix.platform.target }} --verbose ${{ matrix.platform.build_flags }}
 
       # --- Linux: also produce a tarball of the binary -----------------------
 
