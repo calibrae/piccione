@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import type { Conversation, ChatMessage } from "../types";
 import { toastStore } from "./toasts.svelte";
 
@@ -52,6 +57,36 @@ export function createMessagingStore() {
   let activeConversationId = $state<string | null>(null);
   let messages = $state<Map<string, ChatMessage[]>>(new Map());
   let selfId = $state<string | null>(null);
+  let notifyOk = false;
+
+  async function ensureNotifyPermission() {
+    try {
+      notifyOk = await isPermissionGranted();
+      if (!notifyOk) notifyOk = (await requestPermission()) === "granted";
+    } catch {
+      notifyOk = false;
+    }
+  }
+
+  // Desktop notification for an inbound message when the window is not focused.
+  async function notifyInbound(conversationId: string, message: ChatMessage) {
+    if (message.is_outgoing) return;
+    if (typeof document !== "undefined" && document.hasFocus()) return;
+    if (!notifyOk) await ensureNotifyPermission();
+    if (!notifyOk) return;
+    const convo = conversations.find((c) => c.id === conversationId);
+    const title = convo?.name ?? message.sender_name ?? "Nouveau message";
+    const body = message.body
+      ? message.body.slice(0, 140)
+      : message.attachments?.length
+        ? "📎 Pièce jointe"
+        : "";
+    try {
+      sendNotification({ title, body });
+    } catch (e) {
+      console.error("notify failed:", e);
+    }
+  }
 
   // Modifier mirrors. The UI renderer is a separate swimlane — for now we
   // just keep the latest known state per conversation/message so that swarm
@@ -93,6 +128,7 @@ export function createMessagingStore() {
           const existing = messages.get(conversation_id) ?? [];
           messages.set(conversation_id, [...existing, message]);
           messages = new Map(messages);
+          void notifyInbound(conversation_id, message);
         }
       ),
       listen("conversations-updated", () => {
