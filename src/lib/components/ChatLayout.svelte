@@ -24,6 +24,8 @@
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
   let convoSearch = $state("");
+  let searchHits = $state<import("../types").SearchHit[]>([]);
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let showMsgSearch = $state(false);
   let scrolledUp = $state(false);
   let highlightTs = $state<number | null>(null);
@@ -309,6 +311,30 @@
       return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
     })
   );
+
+  // Debounced global message search driven by the sidebar search box.
+  $effect(() => {
+    const q = convoSearch.trim();
+    if (searchTimer) clearTimeout(searchTimer);
+    if (q.length < 2) {
+      searchHits = [];
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      try {
+        searchHits = await invoke<import("../types").SearchHit[]>("search_messages", { query: q });
+      } catch (e) {
+        console.error("search_messages failed:", e);
+        searchHits = [];
+      }
+    }, 250);
+  });
+
+  function openHit(hit: import("../types").SearchHit) {
+    convoSearch = "";
+    searchHits = [];
+    void selectConversation(hit.conversation_id);
+  }
 
   function dayLabel(ts: number): string {
     if (!ts) return "";
@@ -640,6 +666,20 @@
             </div>
           </button>
         {/each}
+      {/if}
+      {#if searchHits.length > 0}
+        <div class="search-results">
+          <div class="search-results-head">Messages</div>
+          {#each searchHits as hit}
+            <button class="search-hit" onclick={() => openHit(hit)}>
+              <div class="hit-top">
+                <span class="hit-conv">{hit.conversation_name}</span>
+                <span class="convo-time">{formatTime(hit.timestamp)}</span>
+              </div>
+              <div class="hit-snippet">{hit.is_group ? hit.sender_name + ": " : ""}{hit.snippet}</div>
+            </button>
+          {/each}
+        </div>
       {/if}
     </div>
   </aside>

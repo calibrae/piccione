@@ -40,6 +40,17 @@ pub struct MediaItem {
     pub attachment: AttachmentInfo,
 }
 
+/// A message search result across all conversations.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub conversation_id: String,
+    pub conversation_name: String,
+    pub is_group: bool,
+    pub timestamp: u64,
+    pub sender_name: String,
+    pub snippet: String,
+}
+
 /// A linked device on the account, for the "Linked devices" view.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceDto {

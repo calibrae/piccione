@@ -539,6 +539,89 @@ impl MessagingService {
         Ok(conversations)
     }
 
+    /// Full-text-ish search across every conversation. Case-insensitive
+    /// substring match on message bodies. Read-only; bounded to `limit` hits.
+    pub async fn search_messages(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::messaging::types::SearchHit>, String> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let store = self.fresh_read_store().await?;
+        let self_aci = self.self_aci.lock().await.clone();
+
+        // Enumerate (thread, id, name, is_group) for contacts + groups.
+        let mut threads: Vec<(presage::store::Thread, String, String, bool)> = Vec::new();
+        if let Ok(contacts) = store.contacts().await {
+            for contact in contacts.flatten() {
+                let uuid_str = contact.uuid.to_string();
+                let name = if Some(&uuid_str) == self_aci.as_ref() {
+                    "Note to Self".to_string()
+                } else if !contact.name.is_empty() {
+                    contact.name.clone()
+                } else {
+                    uuid_str.clone()
+                };
+                let service_id = ServiceId::Aci(
+                    presage::libsignal_service::protocol::Aci::from(contact.uuid),
+                );
+                threads.push((
+                    presage::store::Thread::Contact(service_id),
+                    uuid_str,
+                    name,
+                    false,
+                ));
+            }
+        }
+        if let Ok(groups) = store.groups().await {
+            for (master_key, group) in groups.flatten() {
+                threads.push((
+                    presage::store::Thread::Group(master_key),
+                    hex::encode(master_key),
+                    group.title,
+                    true,
+                ));
+            }
+        }
+
+        let mut hits: Vec<crate::messaging::types::SearchHit> = Vec::new();
+        for (thread, conv_id, conv_name, is_group) in threads {
+            let Ok(iter) = store.messages(&thread, ..).await else {
+                continue;
+            };
+            for msg_result in iter {
+                let Ok(content) = msg_result else { continue };
+                let Some(mut chat_msg) = content_to_chat_message(&content, &self_aci) else {
+                    continue;
+                };
+                let Some(body) = chat_msg.body.clone() else { continue };
+                if !body.to_lowercase().contains(&q) {
+                    continue;
+                }
+                enrich_sender_name(&mut chat_msg, &store, &self_aci).await;
+                hits.push(crate::messaging::types::SearchHit {
+                    conversation_id: conv_id.clone(),
+                    conversation_name: conv_name.clone(),
+                    is_group,
+                    timestamp: chat_msg.timestamp,
+                    sender_name: chat_msg.sender_name.clone(),
+                    snippet: body,
+                });
+                if hits.len() >= limit {
+                    break;
+                }
+            }
+            if hits.len() >= limit {
+                break;
+            }
+        }
+        hits.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(hits)
+    }
+
     /// Load every attachment ever sent or received in a conversation, sorted
     /// newest-first. Used by the media-browser modal.
     ///
