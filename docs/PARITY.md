@@ -56,6 +56,17 @@ the wire. Highest visual-parity-per-effort.
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
 
+## Shipped — wave 8 (merged to main)
+
+- ✅ Edit your own profile name/about (update_profile)
+- ✅ fix: deterministic zero-timeout keychain resolver (CI flake — recv_timeout(0) raced the probe thread, could mint a key)
+
+**Session total: 27 Tier-A features merged + 1 flaky-test fix. Coverage ~12 → ~35 of ~210.**
+
+### What's left (both walls)
+- **Wall A — security-sensitive:** safety-number / identity-key verification. Deliberately deferred to a fresh, unsaturated session — a wrong safety number is a MITM-verification failure, the worst bug class in a Signal client.
+- **Wall B — codec absent from the Rust stack (weeks each):** Backups.proto / Link & Sync history backfill, group create/management, block-list storage (presage: "not implemented"), stories, polls.
+
 ## Shipped — wave 7 (merged to main)
 
 - ✅ Profile fetch for unresolved 1:1 names (retrieve_profile_by_uuid)
