@@ -36,7 +36,7 @@ the wire. Highest visual-parity-per-effort.
 | **Full-text search** | SQLite FTS5 over the messages table | M |
 | **Stickers (receive + render)** | `sticker_metadata`, `install_sticker_pack` | M |
 | ✅ **Linked-device management** | `devices`, `unlink_secondary` | S |
-| **Safety numbers** | libsignal fingerprint module | M |
+| ✅ **Safety numbers** | libsignal fingerprint module | M |
 | **Block / unblock** | presage block API + storage-service | S |
 | ✅ **System notifications + dock badge** | `tauri-plugin-notification` | M |
 | **Disappearing/expire sweep** | local timer + DB delete | S |
@@ -55,6 +55,16 @@ the wire. Highest visual-parity-per-effort.
 
 Payments (MobileCoin), donations/badges, phone-number registration, CDSI SGX
 lookup, megaphones/what's-new, key-transparency UI.
+
+## Shipped — wave 9 (merged to main) — TIER A COMPLETE
+
+- ✅ Safety numbers (libsignal Fingerprint; matches the official client — Signal-Desktop's exact recipe: 5200 iters, v2, 16-byte ACI ids, store identity keys)
+
+**All presage-feasible Tier-A parity is now shipped (28 features). Coverage ~12 → ~36 of ~210.**
+What remains is exclusively **Tier B** — protocol codecs that do not exist in the
+presage/libsignal Rust stack (multi-week each, partly upstream):
+Backups.proto / Link & Sync history backfill, group create/management,
+block-list storage, stories, polls.
 
 ## Shipped — wave 8 (merged to main)
 
