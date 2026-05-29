@@ -44,6 +44,12 @@ export interface MsgRange {
   mention_uuid?: string;
 }
 
+export interface PollInfo {
+  question: string;
+  options: string[];
+  allow_multiple: boolean;
+}
+
 export interface ChatMessage {
   timestamp: number;
   sender_id: string;
@@ -55,6 +61,7 @@ export interface ChatMessage {
   previews?: LinkPreview[];
   body_ranges?: MsgRange[];
   edited?: boolean;
+  poll?: PollInfo;
 }
 
 export interface SearchHit {
