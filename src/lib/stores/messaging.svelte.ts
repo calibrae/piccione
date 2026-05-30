@@ -326,7 +326,8 @@ export function createMessagingStore() {
     conversationId: string,
     body: string,
     filePaths: string[],
-    quote?: QuoteInput
+    quote?: QuoteInput,
+    bodyRanges?: { start: number; length: number; style: string }[]
   ) {
     try {
       await invoke("send_message_with_attachments", {
@@ -334,13 +335,14 @@ export function createMessagingStore() {
         body,
         filePaths,
         quote: quote ?? null,
+        bodyRanges: bodyRanges ?? null,
       });
       await loadConversations();
       await loadMessages(conversationId);
     } catch (e) {
       console.error("Failed to send with attachments:", e);
       toastStore.error("Échec de l'envoi", () =>
-        sendMessageWithAttachments(conversationId, body, filePaths, quote)
+        sendMessageWithAttachments(conversationId, body, filePaths, quote, bodyRanges)
       );
       throw e;
     }

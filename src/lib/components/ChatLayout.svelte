@@ -10,6 +10,7 @@
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
   import { callingStore } from "../stores/calling.svelte";
+  import { parseFormatting } from "../format";
 
   let inputText = $state("");
   let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -98,12 +99,18 @@
     stopTyping();
     try { localStorage.removeItem(draftKey(convId)); } catch { /* ignore */ }
 
+    // Parse compose-side formatting (**bold**, *italic*, ~~strike~~, `mono`,
+    // ||spoiler||) into Signal bodyRanges over the cleaned text.
+    const { text: sendText, ranges } = parseFormatting(body);
+
     // Don't block the UI — fire and forget.
     // Errors surface as toasts via the messaging store.
-    if (files.length > 0 || quote) {
-      messagingStore.sendMessageWithAttachments(convId, body, files, quote).catch(() => {});
+    if (files.length > 0 || quote || ranges.length > 0) {
+      messagingStore
+        .sendMessageWithAttachments(convId, sendText, files, quote, ranges)
+        .catch(() => {});
     } else {
-      messagingStore.sendMessage(convId, body);
+      messagingStore.sendMessage(convId, sendText);
     }
 
     requestAnimationFrame(() => {
