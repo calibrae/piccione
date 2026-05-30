@@ -202,6 +202,7 @@ pub fn run() {
             commands::messaging::vote_poll,
             commands::messaging::set_pin,
             commands::messaging::edit_message,
+            commands::messaging::set_disappearing_timer,
             commands::messaging::get_group_members,
             commands::account::sign_out,
             commands::settings::get_settings,

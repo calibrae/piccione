@@ -174,6 +174,56 @@ describe("ChatLayout attachments", () => {
   });
 });
 
+describe("ChatLayout disappearing + view-once", () => {
+  it("gates view-once media behind a tap-to-view button", async () => {
+    const msg: ChatMessage = {
+      timestamp: Date.now(),
+      sender_id: "alice",
+      sender_name: "Alice",
+      body: null,
+      attachments: [
+        {
+          id: "att-vo",
+          file_name: "secret.png",
+          mime_type: "image/png",
+          size: 999,
+          local_path: "/tmp/secret.png",
+        },
+      ],
+      is_outgoing: false,
+      view_once: true,
+    };
+    setupInvoke([msg]);
+    render(ChatLayout);
+    await selectConversation();
+
+    await waitFor(() => {
+      expect(screen.getByText(/visionnage unique/i)).toBeInTheDocument();
+      // The raw image is NOT rendered until the gate is opened.
+      expect(screen.queryByAltText("secret.png")).toBeNull();
+    });
+  });
+
+  it("renders a disappearing-timer change as a system event", async () => {
+    const msg: ChatMessage = {
+      timestamp: Date.now(),
+      sender_id: "alice",
+      sender_name: "Alice",
+      body: null,
+      attachments: [],
+      is_outgoing: false,
+      system_event: "timer:604800",
+    };
+    setupInvoke([msg]);
+    render(ChatLayout);
+    await selectConversation();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Messages éphémères/i)).toBeInTheDocument();
+    });
+  });
+});
+
 describe("ChatLayout scroll-to-bottom reactivity", () => {
   it("scrolls to bottom when the message list grows", async () => {
     setupInvoke([imageMessage()]);

@@ -385,6 +385,17 @@ pub async fn edit_message(
     state.messaging.send_edit(&conversation_id, target_timestamp, &new_body).await
 }
 
+/// Set or disable the disappearing-messages timer (seconds; 0 = off).
+#[tauri::command]
+pub async fn set_disappearing_timer(
+    app: AppHandle,
+    conversation_id: String,
+    seconds: u32,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.messaging.set_disappearing_timer(&conversation_id, seconds).await
+}
+
 /// Group members (uuid + name) for the @mention picker.
 #[tauri::command]
 pub async fn get_group_members(
