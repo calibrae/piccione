@@ -66,8 +66,21 @@ real group from a linked Piccione (like the voice-call + Backups seams).
 (libsignal-service-rs HTTP + presage wrappers) and the self-credential fetch.
 Create + leave first; rename/add-full-member follow once credential-fetch lands.
 
-## Status
+## Status / progress
 
-Design only. Next concrete step: add `create_group`/`modify_group` to the
-calibrae/libsignal-service-rs fork's `push_service` (mirror `get_group`), then
-the `GroupsManager::create_group` wiring.
+- ✅ **HTTP write verbs** — `create_group` (`PUT /v1/groups/`) + `modify_group`
+  (`PATCH /v1/groups/`) added to `push_service`. **calibrae/libsignal-service-rs#1,
+  merged to `storage-service`.** Piccione builds clean against it.
+- ⏭️ **Next: `GroupsManager::create_group` wiring** — call
+  `encrypt_group_with_credentials(title, "", None, self_credential, candidates, rng)`
+  → `push_service.create_group`. Blocked on:
+- ⛔ **Self `ExpiringProfileKeyCredential` fetch** — the one missing primitive.
+  `encrypt_group_with_credentials` needs our own credential (to put ourselves in
+  the group as admin). Only `retrieve_profile` exists; need a versioned-profile
+  **credential request** (zkgroup `ProfileKeyCredentialRequestContext` +
+  `GET /v1/profile/{aci}/{version}/{credentialRequest}`). This is the next
+  sub-task; once it lands, `create_group` (members invited as pending) + `leave`
+  are a short hop, then the presage wrapper + Piccione UI.
+
+Cross-repo state: **2 fork PRs merged** — calibrae/presage#1 (AEP persist, for
+Backups) + calibrae/libsignal-service-rs#1 (group write verbs).
