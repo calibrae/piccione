@@ -122,6 +122,13 @@ pub struct PollInfo {
     pub allow_multiple: bool,
 }
 
+/// A shared contact card (DataMessage.contact[0]).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ContactCard {
+    pub name: String,
+    pub number: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
@@ -142,6 +149,8 @@ pub struct ChatMessage {
     /// Non-text system event (e.g. a group call started). Renders centered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_event: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_card: Option<ContactCard>,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -306,6 +315,7 @@ mod tests {
             body_ranges: vec![],
             poll: None,
             system_event: None,
+            contact_card: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -450,6 +460,7 @@ mod tests {
                 body_ranges: vec![],
                 poll: None,
                 system_event: None,
+                contact_card: None,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

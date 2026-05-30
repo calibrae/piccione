@@ -50,6 +50,11 @@ export interface PollInfo {
   allow_multiple: boolean;
 }
 
+export interface ContactCard {
+  name: string;
+  number: string | null;
+}
+
 export interface ChatMessage {
   timestamp: number;
   sender_id: string;
@@ -63,6 +68,7 @@ export interface ChatMessage {
   edited?: boolean;
   poll?: PollInfo;
   system_event?: string;
+  contact_card?: ContactCard;
 }
 
 export interface SearchHit {
