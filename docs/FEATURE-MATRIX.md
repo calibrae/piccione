@@ -34,8 +34,8 @@ Baseline: Signal-Desktop v8.15.0-alpha. Status of `main` as of 2026-05-30.
 | Shared contact cards | ✅ | render |
 | Polls | ✅ | render + vote + tally; create ❌ |
 | Pinned messages | ✅ | pin/unpin + bar |
-| View-once media | ❌ | deferred (honor logic) |
-| Disappearing messages | ❌ | deferred (honor/anchor logic) |
+| View-once media | ✅ | tap-to-view gate, consumed after one view |
+| Disappearing messages | ✅ | timer set/receive + UI expiry + timer-change system event |
 | GIF / Giphy | ❌ | |
 | Payments (MobileCoin) | ❌ | out of scope |
 
@@ -91,12 +91,11 @@ Baseline: Signal-Desktop v8.15.0-alpha. Status of `main` as of 2026-05-30.
 
 ## Tally
 
-**~35 of Signal-Desktop's ~210 capabilities** — but the *core* of a real client:
+**~37 of Signal-Desktop's ~210 capabilities** — but the *core* of a real client:
 the entire `DataMessage` send/receive surface, full UX / identity / search /
 notifications, and the import half of the history-on-link codec.
 
 The gaps cluster into four buckets:
-- **honor-logic** — view-once, disappearing messages
 - **upstream-codec** — group-v2 (zkgroup), archive-fetch (WebAPI + live primary), stories (subsystem)
 - **niche / out-of-scope** — payments, GIFs
 

@@ -69,6 +69,10 @@ export interface ChatMessage {
   poll?: PollInfo;
   system_event?: string;
   contact_card?: ContactCard;
+  /** Disappearing-messages lifetime in seconds, if this message expires. */
+  expires_in?: number;
+  /** View-once media: render behind a tap-to-view gate. */
+  view_once?: boolean;
 }
 
 export interface SearchHit {

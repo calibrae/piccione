@@ -69,6 +69,13 @@ enum SendRequest {
         target_timestamp: u64,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Set (or disable) the disappearing-messages timer for a conversation.
+    /// `seconds == 0` turns it off. Sends an EXPIRATION_TIMER_UPDATE DataMessage.
+    SetTimer {
+        conversation_id: String,
+        seconds: u32,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Edit a previously-sent message (new body).
     Edit {
         conversation_id: String,
@@ -626,6 +633,26 @@ impl MessagingService {
         tx.send(SendRequest::Delete {
             conversation_id: conversation_id.to_string(),
             target_timestamp,
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "send reply dropped".to_string())?
+    }
+
+    /// Set or disable the disappearing-messages timer for a conversation.
+    /// `seconds == 0` turns it off.
+    pub async fn set_disappearing_timer(
+        &self,
+        conversation_id: &str,
+        seconds: u32,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::SetTimer {
+            conversation_id: conversation_id.to_string(),
+            seconds,
             reply: reply_tx,
         })
         .map_err(|_| "send channel closed".to_string())?;
@@ -1241,6 +1268,17 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             }
             let _ = reply.send(result);
         }
+        SendRequest::SetTimer {
+            conversation_id,
+            seconds,
+            reply,
+        } => {
+            let result = do_send_timer_update(mgr, &conversation_id, seconds).await;
+            if let Err(ref e) = result {
+                error!("timer update send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
         SendRequest::Typing {
             conversation_id,
             started,
@@ -1477,6 +1515,37 @@ async fn do_send_delete(
             .send_message_to_group(&master_key, data_message, timestamp)
             .await
             .map_err(|e| format!("failed to send group delete: {e}")),
+    }
+}
+
+/// Send an EXPIRATION_TIMER_UPDATE DataMessage to set/disable disappearing
+/// messages for a conversation. `seconds == 0` turns the timer off.
+async fn do_send_timer_update(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    seconds: u32,
+) -> Result<(), String> {
+    const EXPIRATION_TIMER_UPDATE: u32 = 2;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let data_message = DataMessage {
+        timestamp: Some(timestamp),
+        flags: Some(EXPIRATION_TIMER_UPDATE),
+        expire_timer: Some(seconds),
+        ..Default::default()
+    };
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send timer update: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, data_message, timestamp)
+            .await
+            .map_err(|e| format!("failed to send group timer update: {e}")),
     }
 }
 

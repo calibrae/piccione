@@ -441,6 +441,23 @@ export function createMessagingStore() {
     }
   }
 
+  // Remove a message from view (used by disappearing-messages expiry). Reuses
+  // the `deletions` set that delete-for-everyone already filters on at render.
+  function removeMessage(_conversationId: string, targetTimestamp: number) {
+    deletions.add(String(targetTimestamp));
+    deletions = new Set(deletions);
+  }
+
+  // Set or disable the disappearing-messages timer for a conversation.
+  async function setDisappearingTimer(conversationId: string, seconds: number) {
+    try {
+      await invoke("set_disappearing_timer", { conversationId, seconds });
+    } catch (e) {
+      console.error("set_disappearing_timer failed:", e);
+      toastStore.error("Échec du minuteur éphémère");
+    }
+  }
+
   function isBlocked(id: string): boolean {
     return blocked.has(id);
   }
@@ -621,6 +638,8 @@ export function createMessagingStore() {
     sendReaction,
     deleteForEveryone,
     editMessage,
+    removeMessage,
+    setDisappearingTimer,
   };
 }
 

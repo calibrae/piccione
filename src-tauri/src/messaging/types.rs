@@ -161,6 +161,13 @@ pub struct ChatMessage {
     pub system_event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_card: Option<ContactCard>,
+    /// Disappearing-messages timer in seconds, if this message expires.
+    /// The UI starts a countdown when the message is shown and removes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u32>,
+    /// View-once media: render behind a tap-to-view gate; consumed after one view.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub view_once: bool,
 }
 
 /// Request to download an attachment (sent through the send channel)
@@ -326,6 +333,8 @@ mod tests {
             poll: None,
             system_event: None,
             contact_card: None,
+            expires_in: None,
+            view_once: false,
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["body"], "Hi there");
@@ -471,6 +480,8 @@ mod tests {
                 poll: None,
                 system_event: None,
                 contact_card: None,
+                expires_in: None,
+                view_once: false,
             },
         };
         let json = serde_json::to_value(&ev).unwrap();

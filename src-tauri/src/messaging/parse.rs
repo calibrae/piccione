@@ -163,7 +163,30 @@ fn system_event(dm: &DataMessage) -> Option<String> {
     if dm.gift_badge.is_some() {
         return Some("gift-badge".to_string());
     }
+    // A disappearing-messages timer change: EXPIRATION_TIMER_UPDATE flag (bit 2),
+    // carrying the new timer in `expire_timer` (0 = turned off). Encoded so the
+    // UI can render "Disappearing messages set to N seconds" / "turned off".
+    if let Some(flags) = dm.flags {
+        const EXPIRATION_TIMER_UPDATE: u32 = 2;
+        if flags & EXPIRATION_TIMER_UPDATE != 0 {
+            return Some(format!("timer:{}", dm.expire_timer.unwrap_or(0)));
+        }
+    }
     None
+}
+
+/// Disappearing-messages lifetime for a normal message, in seconds.
+/// `None` when the message does not expire (timer unset or zero).
+fn expires_in(dm: &DataMessage) -> Option<u32> {
+    match dm.expire_timer {
+        Some(t) if t > 0 => Some(t),
+        _ => None,
+    }
+}
+
+/// View-once flag: media meant to be opened exactly once.
+fn is_view_once(dm: &DataMessage) -> bool {
+    dm.is_view_once.unwrap_or(false)
 }
 
 /// Extract a poll from DataMessage.pollCreate.
@@ -235,6 +258,8 @@ pub(crate) fn content_to_chat_message(
                 poll: extract_poll(dm),
                 system_event: system_event(dm),
                 contact_card: extract_contact_card(dm),
+                expires_in: expires_in(dm),
+                view_once: is_view_once(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -264,6 +289,8 @@ pub(crate) fn content_to_chat_message(
                         poll: extract_poll(dm),
                         system_event: system_event(dm),
                         contact_card: extract_contact_card(dm),
+                        expires_in: expires_in(dm),
+                        view_once: is_view_once(dm),
                     });
                 }
             }
@@ -584,6 +611,80 @@ mod tests {
             }
             other => panic!("expected Reaction, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn expire_timer_populates_expires_in() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            body: Some("vanishing".to_string()),
+            expire_timer: Some(3600),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let msg = content_to_chat_message(&content, &None).expect("chat message");
+        assert_eq!(msg.expires_in, Some(3600));
+        assert!(!msg.view_once);
+    }
+
+    #[test]
+    fn zero_expire_timer_is_none() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            body: Some("stays".to_string()),
+            expire_timer: Some(0),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let msg = content_to_chat_message(&content, &None).expect("chat message");
+        assert_eq!(msg.expires_in, None);
+    }
+
+    #[test]
+    fn view_once_flag_propagates() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            body: Some("peek".to_string()),
+            is_view_once: Some(true),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let msg = content_to_chat_message(&content, &None).expect("chat message");
+        assert!(msg.view_once);
+    }
+
+    #[test]
+    fn expiration_timer_update_becomes_system_event() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        // Flag bit 2 = EXPIRATION_TIMER_UPDATE, new timer 604800s (1 week), no body.
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            flags: Some(2),
+            expire_timer: Some(604800),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let msg = content_to_chat_message(&content, &None).expect("system message");
+        assert_eq!(msg.system_event.as_deref(), Some("timer:604800"));
+        // A timer-update with no body still renders (as a system event).
+        assert_eq!(msg.body, None);
+    }
+
+    #[test]
+    fn expiration_timer_update_off_is_zero() {
+        let sender = Uuid::from_u128(0x3333_3333_3333_3333_3333_3333_3333_3333);
+        let dm = DataMessage {
+            timestamp: Some(1700000000000),
+            flags: Some(2),
+            expire_timer: Some(0),
+            ..Default::default()
+        };
+        let content = content_with_body(sender, 1700000000000, ContentBody::DataMessage(dm));
+        let msg = content_to_chat_message(&content, &None).expect("system message");
+        assert_eq!(msg.system_event.as_deref(), Some("timer:0"));
     }
 
     #[test]

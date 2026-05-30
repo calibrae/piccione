@@ -34,6 +34,17 @@
   let searchHits = $state<import("../types").SearchHit[]>([]);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let showMsgSearch = $state(false);
+  let showTimerMenu = $state(false);
+  // Disappearing-messages presets (label + seconds), matching Signal's options.
+  const TIMER_PRESETS: { label: string; secs: number }[] = [
+    { label: "Désactivé", secs: 0 },
+    { label: "30 secondes", secs: 30 },
+    { label: "5 minutes", secs: 300 },
+    { label: "1 heure", secs: 3600 },
+    { label: "1 jour", secs: 86400 },
+    { label: "1 semaine", secs: 604800 },
+    { label: "4 semaines", secs: 2419200 },
+  ];
   let scrolledUp = $state(false);
   let highlightTs = $state<number | null>(null);
   let safetyNumber = $state<string | null>(null);
@@ -443,6 +454,64 @@
     if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
     return d.toLocaleDateString([], { day: "numeric", month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
   }
+  // Human-readable disappearing-messages duration (matches Signal's presets).
+  function formatDuration(seconds: number): string {
+    if (seconds <= 0) return "désactivé";
+    const units: [number, string][] = [
+      [604800, "semaine"],
+      [86400, "jour"],
+      [3600, "heure"],
+      [60, "minute"],
+      [1, "seconde"],
+    ];
+    for (const [secs, label] of units) {
+      if (seconds % secs === 0 || seconds >= secs) {
+        const n = Math.round(seconds / secs);
+        const plural = n > 1 && label !== "semaine" ? label + "s" : (n > 1 ? "semaines" : label);
+        return `${n} ${plural}`;
+      }
+    }
+    return `${seconds} s`;
+  }
+
+  // Render a system_event string ("group-call", "gift-badge", "timer:N").
+  function formatSystemEvent(ev: string): string {
+    if (ev === "group-call") return "📞 Appel de groupe";
+    if (ev === "gift-badge") return "🎁 Badge cadeau";
+    if (ev.startsWith("timer:")) {
+      const secs = parseInt(ev.slice(6), 10) || 0;
+      return secs > 0
+        ? `⏳ Messages éphémères : ${formatDuration(secs)}`
+        : "⏳ Messages éphémères désactivés";
+    }
+    return ev;
+  }
+
+  // View-once media the user has already opened (by message timestamp).
+  let viewedOnce = $state<Set<number>>(new Set());
+  function openViewOnce(msg: ChatMessage) {
+    viewedOnce.add(msg.timestamp);
+    viewedOnce = new Set(viewedOnce);
+    // Tell the sender we viewed it (best-effort).
+    invoke("mark_conversation_read", {
+      conversationId: activeConversation?.id,
+    }).catch(() => {});
+  }
+
+  // Schedule removal of a disappearing message once it has been shown. The
+  // anchor is "now" (≈ read time) — honors the spirit of disappearing
+  // messages in the UI; persistent deletion is a follow-up.
+  const expiryTimers = new Set<number>();
+  function armExpiry(msg: ChatMessage) {
+    if (!msg.expires_in || expiryTimers.has(msg.timestamp)) return;
+    expiryTimers.add(msg.timestamp);
+    const ms = msg.expires_in * 1000;
+    setTimeout(() => {
+      messagingStore.removeMessage(activeConversation?.id ?? "", msg.timestamp);
+      expiryTimers.delete(msg.timestamp);
+    }, ms);
+  }
+
   // Show a sender name above an incoming group message when the sender
   // changes (so runs from one person aren't repeatedly labelled).
   function showSender(i: number): boolean {
@@ -507,6 +576,13 @@
       (c) => c.id === messagingStore.activeConversationId
     )
   );
+
+  // Arm disappearing-message expiry for every visible expiring message.
+  $effect(() => {
+    for (const msg of activeMessages) {
+      if (msg.expires_in) armExpiry(msg);
+    }
+  });
 
   function startReply(msg: ChatMessage) {
     replyingTo = msg;
@@ -1029,6 +1105,25 @@
           title={messagingStore.isArchived(activeConversation.id) ? "Désarchiver" : "Archiver"}
           aria-label="Archiver"
         >🗄</button>
+        <div class="timer-wrap">
+          <button
+            class="icon-btn"
+            onclick={() => (showTimerMenu = !showTimerMenu)}
+            title="Messages éphémères"
+            aria-label="Messages éphémères"
+          >⏳</button>
+          {#if showTimerMenu}
+            <div class="timer-menu" role="menu">
+              {#each TIMER_PRESETS as preset}
+                <button
+                  role="menuitem"
+                  class="timer-opt"
+                  onclick={() => { messagingStore.setDisappearingTimer(activeConversation.id, preset.secs); showTimerMenu = false; }}
+                >{preset.label}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
         <button
           class="icon-btn"
           onclick={() => { showMsgSearch = !showMsgSearch; if (!showMsgSearch) msgSearch = ""; }}
@@ -1077,7 +1172,7 @@
           {/if}
           {#if msg.system_event}
             <div class="system-event">
-              {msg.system_event === "group-call" ? "📞 Appel de groupe" : msg.system_event === "gift-badge" ? "🎁 Badge cadeau" : msg.system_event}
+              {formatSystemEvent(msg.system_event)}
             </div>
           {:else}
           <div class="message" class:outgoing={msg.is_outgoing} class:highlight={highlightTs === msg.timestamp} data-ts={msg.timestamp}>
@@ -1142,7 +1237,17 @@
                   <span class="quote-text">{msg.quote.text}</span>
                 </button>
               {/if}
-              {#if msg.attachments && msg.attachments.length > 0}
+              {#if msg.view_once && !viewedOnce.has(msg.timestamp) && msg.attachments && msg.attachments.length > 0}
+                <button type="button" class="view-once-gate" onclick={() => openViewOnce(msg)}>
+                  <span class="vo-icon" aria-hidden="true">👁️</span>
+                  <span>Photo à visionnage unique — toucher pour voir</span>
+                </button>
+              {:else if msg.view_once && viewedOnce.has(msg.timestamp)}
+                <div class="view-once-spent">
+                  <span class="vo-icon" aria-hidden="true">⦰</span>
+                  <span>Visionné</span>
+                </div>
+              {:else if msg.attachments && msg.attachments.length > 0}
                 <div class="attachments">
                   {#each msg.attachments as att}
                     {#if att.mime_type.startsWith("image/") && att.local_path}
@@ -1254,7 +1359,7 @@
                   </button>
                 {/each}
               {/if}
-              <span class="msg-time" title={new Date(msg.timestamp).toLocaleString()}>{#if msg.edited}<span class="edited-tag">modifié · </span>{/if}{formatTime(msg.timestamp)}</span>
+              <span class="msg-time" title={new Date(msg.timestamp).toLocaleString()}>{#if msg.edited}<span class="edited-tag">modifié · </span>{/if}{formatTime(msg.timestamp)}{#if msg.expires_in}<span class="expire-badge" title={`Disparaît après ${formatDuration(msg.expires_in)}`}> · ⏳</span>{/if}</span>
               {#if msg.is_outgoing}
                 {@const r = receiptStatus(msg.timestamp, messagingStore.activeConversationId)}
                 <span class="receipt receipt-{r}" title={r} aria-label={r}>
@@ -2168,4 +2273,56 @@
     border-radius: 8px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   }
+
+  /* Disappearing messages + view-once */
+  .timer-wrap { position: relative; display: inline-flex; }
+  .timer-menu {
+    position: absolute;
+    top: 110%;
+    right: 0;
+    z-index: 30;
+    background: var(--bg-elevated, #1f1f23);
+    border: 1px solid var(--border, #33333a);
+    border-radius: 10px;
+    padding: 4px;
+    min-width: 160px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .timer-opt {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    color: var(--text, #e4e4e7);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .timer-opt:hover { background: var(--bg-hover, #2a2a30); }
+  .expire-badge { opacity: 0.7; }
+  .view-once-gate {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border: 1px dashed var(--border, #4a4a52);
+    border-radius: 12px;
+    background: var(--bg-hover, #2a2a30);
+    color: var(--text, #e4e4e7);
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .view-once-gate:hover { background: var(--bg-elevated, #1f1f23); }
+  .view-once-spent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    color: var(--text-secondary, #a1a1aa);
+    font-style: italic;
+    font-size: 0.85rem;
+  }
+  .vo-icon { font-size: 1.1rem; }
 </style>
