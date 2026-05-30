@@ -24,6 +24,7 @@
   let pendingFiles = $state<string[]>([]);
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
+  let editingMessage = $state<ChatMessage | null>(null);
   let convoSearch = $state("");
   let showArchived = $state(false);
   let searchHits = $state<import("../types").SearchHit[]>([]);
@@ -83,6 +84,16 @@
 
   async function handleSend() {
     const text = inputText.trim();
+    // Editing an existing message: send an EditMessage, not a new one.
+    if (editingMessage && messagingStore.activeConversationId) {
+      if (!text) return;
+      const cid = messagingStore.activeConversationId;
+      const target = editingMessage.timestamp;
+      editingMessage = null;
+      inputText = "";
+      messagingStore.editMessage(cid, target, text);
+      return;
+    }
     if ((!text && pendingFiles.length === 0) || !messagingStore.activeConversationId) return;
     const body = text;
     const files = [...pendingFiles];
@@ -603,6 +614,15 @@
     activeMessages.filter((m) => isPinned(m))
   );
 
+  function startEdit(msg: ChatMessage) {
+    editingMessage = msg;
+    replyingTo = null;
+    inputText = msg.body ?? "";
+  }
+  function cancelEdit() {
+    editingMessage = null;
+    inputText = "";
+  }
   function deleteMessage(msg: ChatMessage) {
     const cid = messagingStore.activeConversationId;
     if (!cid) return;
@@ -1046,6 +1066,14 @@
                 onclick={() => togglePin(msg)}
               >📌</button>
               {#if msg.is_outgoing}
+                {#if msg.body}
+                  <button
+                    class="reply-action"
+                    title="Modifier"
+                    aria-label="Modifier"
+                    onclick={() => startEdit(msg)}
+                  >✏️</button>
+                {/if}
                 <button
                   class="reply-action"
                   title="Supprimer pour tout le monde"
@@ -1225,6 +1253,15 @@
           <button class="link-btn" onclick={() => messagingStore.toggleBlock(activeConversation.id)}>Débloquer</button>
         </div>
       {:else}
+      {#if editingMessage}
+        <div class="reply-preview">
+          <div class="reply-preview-body">
+            <span class="quote-author">Modification</span>
+            <span class="quote-text">{editingMessage.body}</span>
+          </div>
+          <button class="remove-file" onclick={cancelEdit} aria-label="Annuler la modification">&times;</button>
+        </div>
+      {/if}
       {#if replyingTo}
         <div class="reply-preview">
           <div class="reply-preview-body">

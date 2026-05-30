@@ -69,6 +69,13 @@ enum SendRequest {
         target_timestamp: u64,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Edit a previously-sent message (new body).
+    Edit {
+        conversation_id: String,
+        target_timestamp: u64,
+        new_body: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// List the account's linked devices (read-only).
     ListDevices {
         reply: oneshot::Sender<Result<Vec<crate::messaging::types::DeviceDto>, String>>,
@@ -584,6 +591,27 @@ impl MessagingService {
             .map_err(|_| "send channel closed".to_string())?;
         drop(tx_guard);
         reply_rx.await.map_err(|_| "list devices reply dropped".to_string())?
+    }
+
+    /// Edit a previously-sent message.
+    pub async fn send_edit(
+        &self,
+        conversation_id: &str,
+        target_timestamp: u64,
+        new_body: &str,
+    ) -> Result<(), String> {
+        let tx_guard = self.send_tx.lock().await;
+        let tx = tx_guard.as_ref().ok_or("messaging not started")?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(SendRequest::Edit {
+            conversation_id: conversation_id.to_string(),
+            target_timestamp,
+            new_body: new_body.to_string(),
+            reply: reply_tx,
+        })
+        .map_err(|_| "send channel closed".to_string())?;
+        drop(tx_guard);
+        reply_rx.await.map_err(|_| "edit reply dropped".to_string())?
     }
 
     /// Delete-for-everyone a message you sent.
@@ -1172,6 +1200,18 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             }
             let _ = reply.send(result);
         }
+        SendRequest::Edit {
+            conversation_id,
+            target_timestamp,
+            new_body,
+            reply,
+        } => {
+            let result = do_send_edit(mgr, &conversation_id, target_timestamp, &new_body).await;
+            if let Err(ref e) = result {
+                error!("edit send failed: {}", e);
+            }
+            let _ = reply.send(result);
+        }
         SendRequest::Typing {
             conversation_id,
             started,
@@ -1347,6 +1387,40 @@ async fn do_send_receipt(
 
 /// Send a `DataMessage.reaction` (add or remove) to the target message's
 /// thread. `target_author_uuid` is the ACI of the message being reacted to.
+/// Send an `EditMessage` retroactively changing a message's body.
+async fn do_send_edit(
+    mgr: &mut Manager<SqliteStore, Registered>,
+    conversation_id: &str,
+    target_timestamp: u64,
+    new_body: &str,
+) -> Result<(), String> {
+    let new_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_millis() as u64;
+    let thread = parse_thread(conversation_id)?;
+    let data_message = DataMessage {
+        body: Some(new_body.to_string()),
+        timestamp: Some(new_ts),
+        ..Default::default()
+    };
+    let edit = EditMessage {
+        target_sent_timestamp: Some(target_timestamp),
+        data_message: Some(data_message),
+    };
+    use presage::libsignal_service::content::ContentBody;
+    match thread {
+        presage::store::Thread::Contact(service_id) => mgr
+            .send_message(service_id, ContentBody::EditMessage(edit), new_ts)
+            .await
+            .map_err(|e| format!("failed to send edit: {e}")),
+        presage::store::Thread::Group(master_key) => mgr
+            .send_message_to_group(&master_key, ContentBody::EditMessage(edit), new_ts)
+            .await
+            .map_err(|e| format!("failed to send group edit: {e}")),
+    }
+}
+
 /// Send a `DataMessage.delete` (delete-for-everyone) for a message we sent.
 async fn do_send_delete(
     mgr: &mut Manager<SqliteStore, Registered>,
