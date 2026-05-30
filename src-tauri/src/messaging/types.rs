@@ -80,7 +80,17 @@ pub struct QuotedMessage {
 pub struct RangeInput {
     pub start: u32,
     pub length: u32,
-    pub style: String,
+    #[serde(default)]
+    pub style: Option<String>,
+    #[serde(default)]
+    pub mention_uuid: Option<String>,
+}
+
+/// A group member, for the compose @mention picker.
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupMember {
+    pub uuid: String,
+    pub name: String,
 }
 
 /// A reply the user is composing — fed back into the send path to populate

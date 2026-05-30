@@ -671,6 +671,35 @@ impl MessagingService {
     }
 
     /// Load conversations from the store (opens fresh connection to see latest data).
+    /// Resolve a group's members (uuid + display name) for the @mention
+    /// picker. Returns empty for 1:1 threads.
+    pub async fn get_group_members(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<crate::messaging::types::GroupMember>, String> {
+        let store = self.fresh_read_store().await?;
+        let self_aci = self.self_aci.lock().await.clone();
+        let presage::store::Thread::Group(master_key) = parse_thread(conversation_id)? else {
+            return Ok(Vec::new());
+        };
+        let groups = store
+            .groups()
+            .await
+            .map_err(|e| format!("failed to load groups: {e}"))?;
+        for (mk, group) in groups.flatten() {
+            if mk == master_key {
+                let mut out = Vec::new();
+                for m in &group.members {
+                    let uuid = m.aci.service_id_string();
+                    let name = resolve_sender_name(&store, &uuid, &self_aci).await;
+                    out.push(crate::messaging::types::GroupMember { uuid, name });
+                }
+                return Ok(out);
+            }
+        }
+        Ok(Vec::new())
+    }
+
     pub async fn get_conversations(&self) -> Result<Vec<Conversation>, String> {
         let store = self.fresh_read_store().await?;
 
@@ -1798,18 +1827,23 @@ async fn do_send(
         .iter()
         .filter_map(|r| {
             use presage::libsignal_service::proto::body_range::{AssociatedValue, Style};
-            let style = match r.style.as_str() {
-                "bold" => Style::Bold,
-                "italic" => Style::Italic,
-                "spoiler" => Style::Spoiler,
-                "strikethrough" => Style::Strikethrough,
-                "monospace" => Style::Monospace,
-                _ => return None,
+            let av = if let Some(uuid) = &r.mention_uuid {
+                AssociatedValue::MentionAci(uuid.clone())
+            } else {
+                let style = match r.style.as_deref() {
+                    Some("bold") => Style::Bold,
+                    Some("italic") => Style::Italic,
+                    Some("spoiler") => Style::Spoiler,
+                    Some("strikethrough") => Style::Strikethrough,
+                    Some("monospace") => Style::Monospace,
+                    _ => return None,
+                };
+                AssociatedValue::Style(style as i32)
             };
             Some(presage::libsignal_service::proto::BodyRange {
                 start: Some(r.start),
                 length: Some(r.length),
-                associated_value: Some(AssociatedValue::Style(style as i32)),
+                associated_value: Some(av),
             })
         })
         .collect();

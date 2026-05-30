@@ -384,3 +384,13 @@ pub async fn edit_message(
     let state = app.state::<AppState>();
     state.messaging.send_edit(&conversation_id, target_timestamp, &new_body).await
 }
+
+/// Group members (uuid + name) for the @mention picker.
+#[tauri::command]
+pub async fn get_group_members(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<Vec<crate::messaging::types::GroupMember>, String> {
+    let state = app.state::<AppState>();
+    state.messaging.get_group_members(&conversation_id).await
+}

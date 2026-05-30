@@ -10,7 +10,7 @@
   import Settings from "./Settings.svelte";
   import MediaBrowser from "./MediaBrowser.svelte";
   import { callingStore } from "../stores/calling.svelte";
-  import { parseFormatting } from "../format";
+  import { parseFormatting, parseMentions, type Member } from "../format";
 
   let inputText = $state("");
   let messagesContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -25,6 +25,10 @@
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
   let editingMessage = $state<ChatMessage | null>(null);
+  let composerEl = $state<HTMLTextAreaElement | undefined>(undefined);
+  let groupMembers = $state<Member[]>([]);
+  let mentionQuery = $state<string | null>(null);
+  let mentionAtIdx = 0;
   let convoSearch = $state("");
   let showArchived = $state(false);
   let searchHits = $state<import("../types").SearchHit[]>([]);
@@ -62,6 +66,14 @@
       inputText = localStorage.getItem(draftKey(id)) ?? "";
     } catch {
       inputText = "";
+    }
+    groupMembers = [];
+    mentionQuery = null;
+    const gconvo = messagingStore.conversations.find((c) => c.id === id);
+    if (gconvo?.is_group) {
+      invoke<Member[]>("get_group_members", { conversationId: id })
+        .then((m) => (groupMembers = m))
+        .catch(() => {});
     }
     // Fire READ receipts for every inbound (not-outgoing) message in the
     // thread so the sender's client shows the blue double-check.
@@ -111,9 +123,10 @@
     stopTyping();
     try { localStorage.removeItem(draftKey(convId)); } catch { /* ignore */ }
 
-    // Parse compose-side formatting (**bold**, *italic*, ~~strike~~, `mono`,
-    // ||spoiler||) into Signal bodyRanges over the cleaned text.
-    const { text: sendText, ranges } = parseFormatting(body);
+    // Parse compose-side formatting + @mentions into Signal bodyRanges over
+    // the cleaned text.
+    const { text: sendText, ranges: fmtRanges } = parseFormatting(body);
+    const ranges = [...fmtRanges, ...parseMentions(sendText, groupMembers)];
 
     // Don't block the UI — fire and forget.
     // Errors surface as toasts via the messaging store.
@@ -204,6 +217,32 @@
 
   function scrollToBottom() {
     if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  function updateMentionQuery() {
+    const el = composerEl;
+    if (!el || !activeConversation?.is_group) { mentionQuery = null; return; }
+    const pos = el.selectionStart ?? inputText.length;
+    const before = inputText.slice(0, pos);
+    const m = before.match(/@(\S*)$/);
+    if (m) {
+      mentionQuery = m[1];
+      mentionAtIdx = pos - m[1].length - 1;
+    } else {
+      mentionQuery = null;
+    }
+  }
+  let mentionMatches = $derived.by(() => {
+    if (mentionQuery === null) return [] as Member[];
+    const q = mentionQuery.toLowerCase();
+    return groupMembers.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 6);
+  });
+  function insertMention(member: Member) {
+    const pos = composerEl?.selectionStart ?? inputText.length;
+    const after = inputText.slice(pos);
+    inputText = inputText.slice(0, mentionAtIdx) + "@" + member.name + " " + after;
+    mentionQuery = null;
+    requestAnimationFrame(() => composerEl?.focus());
   }
 
   function autosize(e: Event) {
@@ -1253,6 +1292,15 @@
           <button class="link-btn" onclick={() => messagingStore.toggleBlock(activeConversation.id)}>Débloquer</button>
         </div>
       {:else}
+      {#if mentionQuery !== null && mentionMatches.length > 0}
+        <div class="mention-picker">
+          {#each mentionMatches as m}
+            <button class="mention-opt" onclick={() => insertMention(m)}>
+              <span class="mention-at">@</span>{m.name}
+            </button>
+          {/each}
+        </div>
+      {/if}
       {#if editingMessage}
         <div class="reply-preview">
           <div class="reply-preview-body">
@@ -1278,11 +1326,14 @@
         <textarea
           class="composer-input"
           rows="1"
+          bind:this={composerEl}
           placeholder="Message…  (Maj+Entrée = nouvelle ligne)"
           bind:value={inputText}
           onkeydown={handleKeydown}
           onpaste={handlePaste}
-          oninput={(e) => { autosize(e); pokeTyping(); }}
+          oninput={(e) => { autosize(e); pokeTyping(); updateMentionQuery(); }}
+          onkeyup={updateMentionQuery}
+          onclick={updateMentionQuery}
         ></textarea>
         <button
           class="attach-btn"

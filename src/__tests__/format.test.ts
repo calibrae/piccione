@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFormatting } from "../lib/format";
+import { parseFormatting, parseMentions } from "../lib/format";
 
 describe("parseFormatting", () => {
   it("plain text yields no ranges", () => {
@@ -41,3 +41,21 @@ describe("parseFormatting", () => {
     expect(ranges).toEqual([]);
   });
 });
+
+  describe("parseMentions", () => {
+    const members = [
+      { uuid: "u-bob", name: "Bob" },
+      { uuid: "u-bobsmith", name: "Bob Smith" },
+    ];
+    it("matches a member name", () => {
+      const r = parseMentions("hi @Bob", members);
+      expect(r).toEqual([{ start: 3, length: 4, mention_uuid: "u-bob" }]);
+    });
+    it("longest name wins, no overlap", () => {
+      const r = parseMentions("@Bob Smith here", members);
+      expect(r).toEqual([{ start: 0, length: 10, mention_uuid: "u-bobsmith" }]);
+    });
+    it("no match yields no ranges", () => {
+      expect(parseMentions("nobody here", members)).toEqual([]);
+    });
+  });

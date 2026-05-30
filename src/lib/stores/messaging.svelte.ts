@@ -340,7 +340,7 @@ export function createMessagingStore() {
     body: string,
     filePaths: string[],
     quote?: QuoteInput,
-    bodyRanges?: { start: number; length: number; style: string }[]
+    bodyRanges?: { start: number; length: number; style?: string; mention_uuid?: string }[]
   ) {
     try {
       await invoke("send_message_with_attachments", {
