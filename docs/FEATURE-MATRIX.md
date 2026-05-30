@@ -24,7 +24,7 @@ Baseline: Signal-Desktop v8.15.0-alpha. Status of `main` as of 2026-05-30.
 |---|---|---|
 | Reactions (send + render) | ✅ | chips + quick-emoji picker |
 | Quote / reply | ✅ | + tap-to-jump |
-| Edit message (send/receive) | ⚠️ | render incoming "modifié" ✅; sending edits ❌ |
+| Edit message (send/receive) | ✅ | render incoming + send edits (EditMessage) |
 | Delete-for-everyone | ✅ | send + honor incoming |
 | Delete-for-me (local) | ❌ | |
 | Rich text (bold/italic/strike/mono/spoiler) | ✅ | render + compose-send (bodyRanges) |
@@ -96,7 +96,7 @@ notifications, and the import half of the history-on-link codec.
 
 The gaps cluster into four buckets:
 - **honor-logic** — view-once, disappearing messages
-- **rich-input** — compose mentions, sending edits
+- **rich-input** — compose @mentions (needs group-member list in the composer; edit-send is done)
 - **upstream-codec** — group-v2 (zkgroup), archive-fetch (WebAPI + live primary), stories (subsystem)
 - **niche / out-of-scope** — payments, GIFs
 
