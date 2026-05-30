@@ -52,43 +52,50 @@ pub(crate) fn parse_thread(conversation_id: &str) -> Result<presage::store::Thre
     }
 }
 
-pub(crate) fn extract_attachments(dm: &DataMessage) -> Vec<AttachmentInfo> {
+fn attachment_pointer_to_info(
+    ptr: &presage::proto::AttachmentPointer,
+    i: usize,
+) -> AttachmentInfo {
     use prost::Message;
+    let id = match &ptr.attachment_identifier {
+        Some(presage::proto::attachment_pointer::AttachmentIdentifier::CdnId(id)) => id.to_string(),
+        Some(presage::proto::attachment_pointer::AttachmentIdentifier::CdnKey(key)) => key.clone(),
+        None => format!("unknown-{}", i),
+    };
+    let mut buf = Vec::new();
+    let _ = ptr.encode(&mut buf);
+    AttachmentInfo {
+        id,
+        file_name: ptr.file_name.clone().unwrap_or_else(|| format!("file-{}", i)),
+        mime_type: ptr
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+        size: ptr.size.unwrap_or(0) as u64,
+        local_path: None,
+        pointer_data: Some(buf),
+    }
+}
 
-    dm.attachments
+pub(crate) fn extract_attachments(dm: &DataMessage) -> Vec<AttachmentInfo> {
+    let mut out: Vec<AttachmentInfo> = dm
+        .attachments
         .iter()
         .enumerate()
-        .map(|(i, ptr)| {
-            let id = match &ptr.attachment_identifier {
-                Some(presage::proto::attachment_pointer::AttachmentIdentifier::CdnId(id)) => {
-                    id.to_string()
-                }
-                Some(presage::proto::attachment_pointer::AttachmentIdentifier::CdnKey(key)) => {
-                    key.clone()
-                }
-                None => format!("unknown-{}", i),
-            };
-
-            // Serialize the pointer so we can download later
-            let mut buf = Vec::new();
-            let _ = ptr.encode(&mut buf);
-
-            AttachmentInfo {
-                id,
-                file_name: ptr
-                    .file_name
-                    .clone()
-                    .unwrap_or_else(|| format!("file-{}", i)),
-                mime_type: ptr
-                    .content_type
-                    .clone()
-                    .unwrap_or_else(|| "application/octet-stream".to_string()),
-                size: ptr.size.unwrap_or(0) as u64,
-                local_path: None,
-                pointer_data: Some(buf),
+        .map(|(i, ptr)| attachment_pointer_to_info(ptr, i))
+        .collect();
+    // A sticker carries its image as an attachment pointer; surface it so it
+    // downloads + renders like an image (stickers are webp).
+    if let Some(sticker) = &dm.sticker {
+        if let Some(ptr) = &sticker.data {
+            let mut info = attachment_pointer_to_info(ptr, out.len());
+            if info.mime_type == "application/octet-stream" {
+                info.mime_type = "image/webp".to_string();
             }
-        })
-        .collect()
+            out.push(info);
+        }
+    }
+    out
 }
 
 /// Build a UI `QuotedMessage` from a `DataMessage.quote`. Author name is the
