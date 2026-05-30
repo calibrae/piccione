@@ -39,6 +39,7 @@
   let safetyNumber = $state<string | null>(null);
   let safetyError = $state<string | null>(null);
   let showSafety = $state(false);
+  let showGroupInfo = $state(false);
   let recording = $state(false);
   let mediaRecorder: MediaRecorder | null = null;
   let recordChunks: BlobPart[] = [];
@@ -968,7 +969,13 @@
     {:else if activeConversation}
       <div class="chat-header">
         {@render avatarEl(activeConversation.name, activeConversation.avatar_path, "small")}
-        <h2>{activeConversation.name}</h2>
+        {#if activeConversation.is_group}
+          <button class="group-title-btn" onclick={() => (showGroupInfo = true)} title="Infos du groupe">
+            <h2>{activeConversation.name}</h2>
+          </button>
+        {:else}
+          <h2>{activeConversation.name}</h2>
+        {/if}
         {#if !activeConversation.is_group}
           <button
             class="icon-btn"
@@ -1361,6 +1368,27 @@
   conversationId={messagingStore.activeConversationId}
   conversationName={activeConversation?.name ?? ""}
 />
+
+{#if showGroupInfo && activeConversation?.is_group}
+  <div class="lightbox" role="dialog" aria-modal="true" aria-label="Infos du groupe"
+       onclick={(e) => { if (e.currentTarget === e.target) showGroupInfo = false; }}
+       onkeydown={(e) => { if (e.key === "Escape") showGroupInfo = false; }}
+       tabindex="-1">
+    <div class="group-info-card">
+      <h3>{activeConversation.name}</h3>
+      <p class="muted small">{groupMembers.length} membre{groupMembers.length > 1 ? "s" : ""}</p>
+      <ul class="member-list">
+        {#each groupMembers as m}
+          <li class="member">
+            {@render avatarEl(m.name, null, "small")}
+            <span class="member-name">{m.name}</span>
+          </li>
+        {/each}
+      </ul>
+      <button class="secondary-btn" onclick={() => (showGroupInfo = false)}>Fermer</button>
+    </div>
+  </div>
+{/if}
 
 {#if showSafety}
   <div class="lightbox" role="dialog" aria-modal="true" aria-label="Numéro de sécurité"
