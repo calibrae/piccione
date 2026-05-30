@@ -75,6 +75,19 @@ export function createMessagingStore() {
   let muted = $state<Set<string>>(loadMuted());
 
   let blocked = $state<Set<string>>(loadBlocked());
+  let pinnedConvos = $state<Set<string>>(loadSet("piccione.pinnedConvos"));
+  let archivedConvos = $state<Set<string>>(loadSet("piccione.archivedConvos"));
+  function loadSet(k: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(k);
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  }
+  function persistSet(k: string, set: Set<string>) {
+    try { localStorage.setItem(k, JSON.stringify([...set])); } catch { /* ignore */ }
+  }
   function loadBlocked(): Set<string> {
     try {
       const raw = localStorage.getItem("piccione.blocked");
@@ -421,6 +434,19 @@ export function createMessagingStore() {
     persistBlocked();
   }
 
+  function isPinnedConvo(id: string): boolean { return pinnedConvos.has(id); }
+  function togglePinConvo(id: string) {
+    if (pinnedConvos.has(id)) pinnedConvos.delete(id); else pinnedConvos.add(id);
+    pinnedConvos = new Set(pinnedConvos);
+    persistSet("piccione.pinnedConvos", pinnedConvos);
+  }
+  function isArchived(id: string): boolean { return archivedConvos.has(id); }
+  function toggleArchive(id: string) {
+    if (archivedConvos.has(id)) archivedConvos.delete(id); else archivedConvos.add(id);
+    archivedConvos = new Set(archivedConvos);
+    persistSet("piccione.archivedConvos", archivedConvos);
+  }
+
   function isMuted(conversationId: string): boolean {
     return muted.has(conversationId);
   }
@@ -525,6 +551,12 @@ export function createMessagingStore() {
     },
     isBlocked,
     toggleBlock,
+    get pinnedConvos() { return pinnedConvos; },
+    isPinnedConvo,
+    togglePinConvo,
+    get archivedConvos() { return archivedConvos; },
+    isArchived,
+    toggleArchive,
     fetchProfile,
     get pollVotes() {
       return pollVotes;

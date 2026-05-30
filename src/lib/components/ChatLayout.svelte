@@ -25,6 +25,7 @@
   let lightboxSrc = $state<string | null>(null);
   let replyingTo = $state<ChatMessage | null>(null);
   let convoSearch = $state("");
+  let showArchived = $state(false);
   let searchHits = $state<import("../types").SearchHit[]>([]);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let showMsgSearch = $state(false);
@@ -337,11 +338,23 @@
   }
 
   let filteredConversations = $derived(
-    messagingStore.conversations.filter((c) => {
-      if (messagingStore.isBlocked(c.id)) return false;
-      const q = convoSearch.trim().toLowerCase();
-      return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
-    })
+    messagingStore.conversations
+      .filter((c) => {
+        if (messagingStore.isBlocked(c.id)) return false;
+        if (messagingStore.isArchived(c.id) !== showArchived) return false;
+        const q = convoSearch.trim().toLowerCase();
+        return !q || c.name.toLowerCase().includes(q) || (c.last_message ?? "").toLowerCase().includes(q);
+      })
+      .slice()
+      .sort((a, b) => {
+        const pa = messagingStore.isPinnedConvo(a.id) ? 1 : 0;
+        const pb = messagingStore.isPinnedConvo(b.id) ? 1 : 0;
+        if (pa !== pb) return pb - pa; // pinned first
+        return b.last_timestamp - a.last_timestamp;
+      })
+  );
+  let archivedCount = $derived(
+    messagingStore.conversations.filter((c) => messagingStore.isArchived(c.id)).length
   );
 
   // Debounced global message search driven by the sidebar search box.
@@ -780,7 +793,7 @@
             {@render avatarEl(convo.name, convo.avatar_path, "")}
             <div class="convo-info">
               <div class="convo-top">
-                <span class="convo-name">{convo.name}{#if messagingStore.isMuted(convo.id)} <span class="muted-icon" title="Notifications coupées">🔕</span>{/if}</span>
+                <span class="convo-name">{#if messagingStore.isPinnedConvo(convo.id)}📍 {/if}{convo.name}{#if messagingStore.isMuted(convo.id)} <span class="muted-icon" title="Notifications coupées">🔕</span>{/if}</span>
                 <span class="convo-time">{formatTime(convo.last_timestamp)}</span>
               </div>
               <div class="convo-bottom">
@@ -792,6 +805,11 @@
             </div>
           </button>
         {/each}
+      {/if}
+      {#if archivedCount > 0 || showArchived}
+        <button class="archived-toggle" onclick={() => (showArchived = !showArchived)}>
+          {showArchived ? "← Conversations" : `Archivées (${archivedCount})`}
+        </button>
       {/if}
       {#if searchHits.length > 0}
         <div class="search-results">
@@ -933,6 +951,18 @@
         >
           {messagingStore.isMuted(activeConversation.id) ? "🔕" : "🔔"}
         </button>
+        <button
+          class="icon-btn"
+          onclick={() => messagingStore.togglePinConvo(activeConversation.id)}
+          title={messagingStore.isPinnedConvo(activeConversation.id) ? "Désépingler la conversation" : "Épingler la conversation"}
+          aria-label="Épingler la conversation"
+        >📍</button>
+        <button
+          class="icon-btn"
+          onclick={() => messagingStore.toggleArchive(activeConversation.id)}
+          title={messagingStore.isArchived(activeConversation.id) ? "Désarchiver" : "Archiver"}
+          aria-label="Archiver"
+        >🗄</button>
         <button
           class="icon-btn"
           onclick={() => { showMsgSearch = !showMsgSearch; if (!showMsgSearch) msgSearch = ""; }}
