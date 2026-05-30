@@ -132,13 +132,21 @@ Import side is **functional and unit-validated**:
    `::Group`→`save_group`; `ChatItem`→reconstruct `Content`/`DataMessage`→
    `save_message` (the hard part: edits/reactions/quotes/attachments fidelity).
    Compile-verifiable now; correctness needs a real archive.
-2. **Transfer-archive request (BLOCKED on proto)** — confirmed the
-   transfer-archive `SyncMessage` is **absent** from libsignal-service-rs's
-   generated proto. Needs adding the field + regenerating protos in the
-   calibrae/libsignal-service-rs fork, then a live primary to exercise the
-   request→upload→download handshake. This is the trigger that fetches an
-   archive; until it exists, import runs only against an archive file
-   obtained out-of-band.
+2. **Transfer-archive fetch (concrete mechanism, needs live infra).**
+   NOT a sync message — it's a **WebAPI long-poll**. Secondary side
+   (Piccione), confirmed from Signal-Desktop `ts/textsecure/WebAPI.preload.ts`:
+   - `GET /v1/devices/transfer_archive` — long-poll; returns a
+     `TransferArchive { cdn, key }` (CDN locator for the uploaded archive) or
+     empty `''` on timeout (re-poll). Auth = our identified credentials.
+   - On a non-empty response: download the encrypted archive blob from the
+     given CDN location, then feed it to the **already-built** `import_backup`
+     (derive `MessageBackupKey` → `extract_backup` → store). The primary
+     uploads the archive + registers it server-side; that's the phone's job.
+   To implement: add a `wait_for_transfer_archive()` + CDN-download method on
+   the calibrae/presage fork's `PushService` (it's presage-internal), chain
+   poll→download→`import_backup`. Validation requires a live primary actively
+   doing Link & Sync — cannot be unit-tested. Until then, `import_backup`
+   runs against an archive **file** supplied out-of-band (the Settings UI).
 3. **Attachments / non-text items** — ChatItem attachments are FilePointers
    needing the download path; reactions/quotes map to existing modifiers.
 4. **Import UI polish** — basic file-picker import shipped; add post-link
