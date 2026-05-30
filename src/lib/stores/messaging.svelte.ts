@@ -412,6 +412,23 @@ export function createMessagingStore() {
     }
   }
 
+  async function editMessage(conversationId: string, targetTimestamp: number, newBody: string) {
+    try {
+      await invoke("edit_message", { conversationId, targetTimestamp, newBody });
+      // Optimistic: apply the edit locally (renders new body + "modifié").
+      edits.set(String(targetTimestamp), {
+        chat_id: conversationId,
+        message_id: String(targetTimestamp),
+        new_text: newBody,
+        edited_at: Date.now(),
+      });
+      edits = new Map(edits);
+    } catch (e) {
+      console.error("edit_message failed:", e);
+      toastStore.error("Échec de la modification");
+    }
+  }
+
   async function deleteForEveryone(conversationId: string, targetTimestamp: number) {
     try {
       await invoke("delete_for_everyone", { conversationId, targetTimestamp });
@@ -603,6 +620,7 @@ export function createMessagingStore() {
     loadSelfId,
     sendReaction,
     deleteForEveryone,
+    editMessage,
   };
 }
 

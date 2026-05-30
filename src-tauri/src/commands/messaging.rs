@@ -372,3 +372,15 @@ pub async fn import_backup(app: AppHandle, path: String) -> Result<usize, String
 pub async fn import_backup(_app: AppHandle, _path: String) -> Result<usize, String> {
     Err("message backups are not available in this build".into())
 }
+
+/// Edit a previously-sent message.
+#[tauri::command]
+pub async fn edit_message(
+    app: AppHandle,
+    conversation_id: String,
+    target_timestamp: u64,
+    new_body: String,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state.messaging.send_edit(&conversation_id, target_timestamp, &new_body).await
+}

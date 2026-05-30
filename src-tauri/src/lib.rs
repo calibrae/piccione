@@ -201,6 +201,7 @@ pub fn run() {
             commands::messaging::import_backup,
             commands::messaging::vote_poll,
             commands::messaging::set_pin,
+            commands::messaging::edit_message,
             commands::account::sign_out,
             commands::settings::get_settings,
             commands::settings::set_settings,
