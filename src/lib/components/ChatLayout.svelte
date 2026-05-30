@@ -1112,6 +1112,15 @@
                   {/if}
                 </p>
               {/if}
+              {#if msg.contact_card}
+                <div class="contact-card">
+                  <span class="cc-avatar">👤</span>
+                  <div class="cc-info">
+                    <span class="cc-name">{msg.contact_card.name}</span>
+                    {#if msg.contact_card.number}<span class="cc-number">{msg.contact_card.number}</span>{/if}
+                  </div>
+                </div>
+              {/if}
               {#if msg.poll}
                 <div class="poll">
                   <div class="poll-q">📊 {msg.poll.question}</div>

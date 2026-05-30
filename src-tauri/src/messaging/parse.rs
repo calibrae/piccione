@@ -169,6 +169,28 @@ fn extract_poll(dm: &DataMessage) -> Option<crate::messaging::types::PollInfo> {
     })
 }
 
+/// First shared contact card from DataMessage.contact, if any.
+fn extract_contact_card(dm: &DataMessage) -> Option<crate::messaging::types::ContactCard> {
+    let c = dm.contact.first()?;
+    let name = c
+        .name
+        .as_ref()
+        .map(|n| {
+            format!(
+                "{} {}",
+                n.given_name.clone().unwrap_or_default(),
+                n.family_name.clone().unwrap_or_default()
+            )
+            .trim()
+            .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .or_else(|| c.organization.clone())
+        .unwrap_or_else(|| "Contact".to_string());
+    let number = c.number.first().and_then(|p| p.value.clone());
+    Some(crate::messaging::types::ContactCard { name, number })
+}
+
 pub(crate) fn content_to_chat_message(
     content: &Content,
     self_aci: &Option<String>,
@@ -188,8 +210,9 @@ pub(crate) fn content_to_chat_message(
             let attachments = extract_attachments(dm);
             let poll = extract_poll(dm);
             let system = system_event(dm);
-            // Skip messages with no text, attachments, poll, or system event.
-            if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() {
+            let contact_card = extract_contact_card(dm);
+            // Skip messages with no displayable content.
+            if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() && contact_card.is_none() {
                 return None;
             }
             Some(ChatMessage {
@@ -204,6 +227,7 @@ pub(crate) fn content_to_chat_message(
                 body_ranges: extract_body_ranges(dm),
                 poll: extract_poll(dm),
                 system_event: system_event(dm),
+                contact_card: extract_contact_card(dm),
             })
         }
         ContentBody::SynchronizeMessage(sync) => {
@@ -216,7 +240,8 @@ pub(crate) fn content_to_chat_message(
                     let attachments = extract_attachments(dm);
                     let poll = extract_poll(dm);
                     let system = system_event(dm);
-                    if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() {
+                    let contact_card = extract_contact_card(dm);
+                    if body.is_none() && attachments.is_empty() && poll.is_none() && system.is_none() && contact_card.is_none() {
                         return None;
                     }
                     return Some(ChatMessage {
@@ -231,6 +256,7 @@ pub(crate) fn content_to_chat_message(
                         body_ranges: extract_body_ranges(dm),
                         poll: extract_poll(dm),
                         system_event: system_event(dm),
+                        contact_card: extract_contact_card(dm),
                     });
                 }
             }
