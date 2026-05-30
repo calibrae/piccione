@@ -74,6 +74,15 @@ pub struct QuotedMessage {
     pub text: String,
 }
 
+/// A formatting span the user applied while composing — fed into the send
+/// path to populate `DataMessage.bodyRanges`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RangeInput {
+    pub start: u32,
+    pub length: u32,
+    pub style: String,
+}
+
 /// A reply the user is composing — fed back into the send path to populate
 /// `DataMessage.quote`.
 #[derive(Debug, Clone, serde::Deserialize)]

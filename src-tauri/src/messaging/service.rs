@@ -35,6 +35,7 @@ enum SendRequest {
         body: String,
         file_paths: Vec<String>,
         quote: Option<crate::messaging::types::QuoteInput>,
+        body_ranges: Vec<crate::messaging::types::RangeInput>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Send a ReceiptMessage (DELIVERY / READ / VIEWED) back to the sender of
@@ -364,7 +365,7 @@ impl MessagingService {
 
     /// Send a text message via the channel to the messaging thread.
     pub async fn send_message(&self, conversation_id: &str, body: &str) -> Result<(), String> {
-        self.send_message_with_attachments(conversation_id, body, vec![], None)
+        self.send_message_with_attachments(conversation_id, body, vec![], None, vec![])
             .await
     }
 
@@ -375,6 +376,7 @@ impl MessagingService {
         body: &str,
         file_paths: Vec<String>,
         quote: Option<crate::messaging::types::QuoteInput>,
+        body_ranges: Vec<crate::messaging::types::RangeInput>,
     ) -> Result<(), String> {
         let tx_guard = self.send_tx.lock().await;
         let tx = tx_guard.as_ref().ok_or("messaging not started")?;
@@ -385,6 +387,7 @@ impl MessagingService {
             body: body.to_string(),
             file_paths,
             quote,
+            body_ranges,
             reply: reply_tx,
         })
         .map_err(|_| "send channel closed".to_string())?;
@@ -1096,10 +1099,11 @@ async fn handle_send_request(mgr: &mut Manager<SqliteStore, Registered>, req: Se
             body,
             file_paths,
             quote,
+            body_ranges,
             reply,
         } => {
             info!("processing send to {}", conversation_id);
-            let result = do_send(mgr, &conversation_id, &body, &file_paths, quote).await;
+            let result = do_send(mgr, &conversation_id, &body, &file_paths, quote, body_ranges).await;
             if let Err(ref e) = result {
                 error!("send failed: {}", e);
             } else {
@@ -1653,6 +1657,7 @@ async fn do_send(
     body: &str,
     file_paths: &[String],
     quote: Option<crate::messaging::types::QuoteInput>,
+    body_ranges: Vec<crate::messaging::types::RangeInput>,
 ) -> Result<(), String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1715,6 +1720,26 @@ async fn do_send(
     };
 
     // Build DataMessage.quote from the reply target, if any.
+    let body_ranges_proto: Vec<presage::libsignal_service::proto::BodyRange> = body_ranges
+        .iter()
+        .filter_map(|r| {
+            use presage::libsignal_service::proto::body_range::{AssociatedValue, Style};
+            let style = match r.style.as_str() {
+                "bold" => Style::Bold,
+                "italic" => Style::Italic,
+                "spoiler" => Style::Spoiler,
+                "strikethrough" => Style::Strikethrough,
+                "monospace" => Style::Monospace,
+                _ => return None,
+            };
+            Some(presage::libsignal_service::proto::BodyRange {
+                start: Some(r.start),
+                length: Some(r.length),
+                associated_value: Some(AssociatedValue::Style(style as i32)),
+            })
+        })
+        .collect();
+
     let quote_proto = quote.map(|q| {
         use presage::libsignal_service::proto::data_message::Quote;
         Quote {
@@ -1732,6 +1757,7 @@ async fn do_send(
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
                 quote: quote_proto,
+                body_ranges: body_ranges_proto,
                 ..Default::default()
             };
             mgr.send_message(service_id, data_message, timestamp)
@@ -1744,6 +1770,7 @@ async fn do_send(
                 timestamp: Some(timestamp),
                 attachments: attachment_pointers,
                 quote: quote_proto,
+                body_ranges: body_ranges_proto,
                 ..Default::default()
             };
             mgr.send_message_to_group(&master_key, data_message, timestamp)
